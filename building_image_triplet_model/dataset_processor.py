@@ -117,30 +117,63 @@ class DatasetProcessor:
             self.logger.addHandler(sh); self.logger.addHandler(fh)
 
     def _read_metadata(self) -> pd.DataFrame:
-        """Read and preprocess metadata CSV in chunks."""
-        chunks = []
-        total_unique_targets = 0
-        for chunk in pd.read_csv(self.config.metadata_file, chunksize=10000):
-            total_unique_targets += chunk['TargetID'].nunique()
-            chunks.append(chunk)
-            if self.config.n_samples and total_unique_targets >= self.config.n_samples:
-                self.logger.info(f'Found {total_unique_targets} unique TargetIDs, stopping early (n_samples limit).')
-                break
+        """
+        Stream‑read the metadata CSV.
 
-        df = pd.concat(chunks, ignore_index=True)
+        If n_samples is None  → return the full dataframe (chunk‑concatenated).
 
-        if self.config.n_samples:
-            # Sample a subset of unique TargetIDs
-            target_ids = df['TargetID'].unique()
-            self.logger.info(f"Found {len(target_ids)} target IDs, selecting {self.config.n_samples} samples.")
-            sampled_targets = np.random.choice(
-                target_ids,
-                size=min(self.config.n_samples, len(target_ids)),
-                replace=False
+        If n_samples is set   → perform a two‑pass read so that every TargetID
+                                has equal probability of being chosen, without
+                                loading the whole file at once.
+
+        1st pass: collect the unique TargetIDs with a running reservoir‑sample
+                  (if the file is huge). 2nd pass: read again, keeping only the
+                  rows whose TargetID is in the final sample set.
+        """
+        chunksize = 10000
+        if self.config.n_samples is None:
+            # simple concatenate
+            self.logger.info("Reading full metadata (no sampling)...")
+            return pd.concat(
+                pd.read_csv(self.config.metadata_file, chunksize=chunksize),
+                ignore_index=True,
             )
-            df = df[df['TargetID'].isin(sampled_targets)]
 
-        return df
+        # ---------- PASS 1: reservoir sample unique TargetIDs ----------
+        reservoir = []
+        seen = set()
+        total_unique = 0
+        rng = np.random.default_rng()
+        self.logger.info("Pass 1/2: reservoir‑sampling TargetIDs…")
+        for chunk in pd.read_csv(self.config.metadata_file, chunksize=chunksize, usecols=["TargetID"]):
+            for tid in chunk["TargetID"]:
+                if tid in seen:
+                    continue
+                seen.add(tid)
+                total_unique += 1
+                if len(reservoir) < self.config.n_samples:
+                    reservoir.append(tid)
+                else:
+                    j = rng.integers(0, total_unique)
+                    if j < self.config.n_samples:
+                        reservoir[j] = tid
+
+        self.logger.info(
+            f"Discovered {total_unique} unique TargetIDs; sampled {len(reservoir)}."
+        )
+        sample_set = set(reservoir)
+
+        # ---------- PASS 2: collect rows for sampled IDs ----------
+        keep_chunks = []
+        usecols = None  # read all columns now
+        self.logger.info("Pass 2/2: collecting sampled rows…")
+        for chunk in pd.read_csv(self.config.metadata_file, chunksize=chunksize):
+            keep = chunk[chunk["TargetID"].isin(sample_set)]
+            if not keep.empty:
+                keep_chunks.append(keep)
+
+        df_sampled = pd.concat(keep_chunks, ignore_index=True)
+        return df_sampled
 
     def _create_splits(self, target_ids: np.ndarray) -> Dict[str, np.ndarray]:
         """Create train/val/test splits based on TargetID."""
