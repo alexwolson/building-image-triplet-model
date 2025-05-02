@@ -6,7 +6,9 @@ from typing import Tuple, List, Dict
 from dataclasses import dataclass
 import logging
 from PIL import Image
-import math  # for math.log1p, etc.
+import math
+from torchvision.transforms.functional import to_tensor
+from collections import OrderedDict
 
 
 logger = logging.getLogger(__name__)
@@ -47,26 +49,31 @@ class GeoTripletDataset(Dataset):
         metadata/difficulty_scores_{split} : NxN log-dist matrix
         metadata/target_id_order_{split}   : N unique TargetIDs
       - For negative sampling, we pick TIDs whose log-distance to the anchor's TID
-        lies in the chosen [min_logdist, max_logdist] range.
+        lies in the chosen log-dist range for each difficulty band.
     """
     def __init__(
             self,
             hdf5_path: str,
             split: str = 'train',
-            min_distance: float = 0.001,
-            max_distance: float = 0.01,
             num_difficulty_levels: int = 5,
+            ucb_alpha: float = 2.0,
             cache_size: int = 1000,
             transform=None
     ):
         logger.info(f"Initializing GeoTripletDataset for split='{split}'...")
 
-        # Open HDF5 file in read mode
-        self.h5_file = h5py.File(hdf5_path, 'r')
+        self.hdf5_path = hdf5_path
+        self.h5_file = None
+        self._open_h5()
         self.transform = transform
         self.split = split
         self.cache_size = cache_size
         self.cache = {}
+        self.tensor_cache = OrderedDict()
+        self.row_cache = OrderedDict()
+        self.row_cache_size = 1024
+        self.rng = np.random.default_rng()
+        self.ucb_alpha = ucb_alpha
 
         # --------------------------------------------------------------------
         # 1) Load split-specific difficulty matrix and target_id_order
@@ -75,7 +82,7 @@ class GeoTripletDataset(Dataset):
         difficulty_key = f"difficulty_scores_{split}"
         target_order_key = f"target_id_order_{split}"
 
-        self.difficulty_scores = self.h5_file['metadata'][difficulty_key][:]
+        self.difficulty_scores = self.h5_file['metadata'][difficulty_key]  # leave on disk
         self.target_id_order = self.h5_file['metadata'][target_order_key][:]
         logger.info(
             f"Loaded difficulty_scores='{difficulty_key}' with shape "
@@ -112,18 +119,29 @@ class GeoTripletDataset(Dataset):
         self.target_to_indices = self._create_target_mapping()
 
         # --------------------------------------------------------------------
-        # 4) Create difficulty levels in log-dist space
-        #    If you want [min_distance, max_distance] in lat/lon, we do log1p on them.
+        # 4) Create difficulty levels based on quantiles of the distance matrix
         # --------------------------------------------------------------------
-        self.difficulty_levels = self._init_difficulty_levels(
-            min_distance,
-            max_distance,
-            num_difficulty_levels
-        )
+        self.difficulty_levels = self._init_difficulty_levels(num_difficulty_levels)
 
         logger.info(
             f"GeoTripletDataset split='{split}' created with {len(self.valid_indices)} samples."
         )
+
+    # ------------------------------------------------------------------ #
+    #  File‑handle utils for multiprocessing DataLoader workers
+    # ------------------------------------------------------------------ #
+    def _open_h5(self):
+        if self.h5_file is None or not self.h5_file.__bool__():
+            self.h5_file = h5py.File(self.hdf5_path, 'r')
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['h5_file'] = None   # do not pickle file handle
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._open_h5()
 
     def _create_target_mapping(self) -> Dict[int, List[int]]:
         """
@@ -135,53 +153,74 @@ class GeoTripletDataset(Dataset):
             mapping.setdefault(target_id, []).append(local_idx)
         return mapping
 
-    def _init_difficulty_levels(
-            self,
-            min_distance: float,
-            max_distance: float,
-            num_levels: int
-    ) -> List[TripletDifficulty]:
+    def _init_difficulty_levels(self, num_levels: int) -> List[TripletDifficulty]:
         """
-        Convert [min_distance, max_distance] (raw lat/lon distances)
-        into [log1p(min_dist), log1p(max_dist)] and subdivide linearly.
+        Build `num_levels` difficulty bands whose boundaries are the empirical
+        quantiles of the split‑specific distance matrix.  This makes the
+        ranges metric‑agnostic: each level contains roughly the same number
+        of candidate negatives.
         """
-        min_logdist = math.log1p(min_distance)   # log(1 + min_distance)
-        max_logdist = math.log1p(max_distance)   # log(1 + max_distance)
+        ds = self.difficulty_scores  # HDF5 dataset, shape (N, N)
+        n = ds.shape[0]
 
-        # We do linear spacing in the log-dist domain
-        distances = np.linspace(min_logdist, max_logdist, num_levels + 1, dtype=np.float32)
+        # -------- Sampling to avoid loading the full N×N matrix --------
+        # Sample every k‑th row and column (k chosen so that at most ~1e6
+        # values are read).  This keeps RAM use low and still captures the
+        # distribution well.
+        target_sample = 1_000_000
+        stride = max(1, int(math.sqrt((n * n) / target_sample)))
+
+        sample_rows = np.arange(0, n, stride)
+        samples = []
+        for r in sample_rows:
+            samples.append(ds[r, ::stride])
+        sample_values = np.concatenate(samples).astype(np.float32)
+
+        # -------- Compute quantile boundaries --------
+        bounds = np.quantile(sample_values,
+                             np.linspace(0.0, 1.0, num_levels + 1)).astype(np.float32)
 
         levels = []
-        for i in range(num_levels):
+        for lo, hi in zip(bounds[:-1], bounds[1:]):
             levels.append(
                 TripletDifficulty(
-                    min_distance=distances[i],
-                    max_distance=distances[i+1],
+                    min_distance=float(lo),
+                    max_distance=float(hi),
                     success_rate=0.5,
-                    num_attempts=0
+                    num_attempts=0,
                 )
             )
+
+        logger.info(
+            "Difficulty bands (quantiles): " +
+            ", ".join(f"[{lo:.4f}, {hi:.4f}]" for lo, hi in zip(bounds[:-1], bounds[1:]))
+        )
         return levels
 
     def _select_difficulty_level(self) -> TripletDifficulty:
         """
-        Probabilistically select a difficulty level, weighted by (1 - success_rate).
-        If a difficulty has never been attempted (num_attempts=0), it has weight=1.
+        Upper‑Confidence‑Bound selection balancing exploration &
+        exploitation: score = (1 - success_rate) + sqrt(α*ln(T)/n).
         """
-        probs = np.array([
-            (1 - lvl.success_rate) if lvl.num_attempts > 0 else 1.0
-            for lvl in self.difficulty_levels
-        ], dtype=np.float32)
-
-        total_prob = probs.sum()
-        if total_prob <= 0:
-            logger.warning("All difficulty levels have success_rate=1.0; using uniform distribution.")
-            probs = np.ones(len(self.difficulty_levels), dtype=np.float32)
-            total_prob = probs.sum()
-
-        probs /= total_prob
-        idx = np.random.choice(len(self.difficulty_levels), p=probs)
+        total_attempts = sum(max(1, lvl.num_attempts) for lvl in self.difficulty_levels)
+        scores = []
+        for lvl in self.difficulty_levels:
+            exploitation = 1.0 - lvl.success_rate
+            exploration = math.sqrt(self.ucb_alpha * math.log(total_attempts) / max(1, lvl.num_attempts))
+            scores.append(exploitation + exploration)
+        idx = int(np.argmax(scores))
         return self.difficulty_levels[idx]
+
+    def _get_distance_row(self, anchor_row: int) -> np.ndarray:
+        """LRU‑cache one row of the distance matrix (float16 -> float32)."""
+        if anchor_row in self.row_cache:
+            return self.row_cache[anchor_row]
+        row = self.difficulty_scores[anchor_row, :].astype(np.float32)
+        # maintain LRU cache
+        if len(self.row_cache) >= self.row_cache_size:
+            self.row_cache.pop(next(iter(self.row_cache)))
+        self.row_cache[anchor_row] = row
+        return row
 
     def _get_negative_sample(self, anchor_idx: int) -> int:
         """
@@ -200,7 +239,7 @@ class GeoTripletDataset(Dataset):
 
         # If all difficulty levels fail, fallback to random
         logger.info("No valid negative found in any difficulty level. Fallback to random local index.")
-        return np.random.randint(0, len(self.valid_indices))
+        return int(self.rng.integers(0, len(self.valid_indices)))
 
     def _get_negative_in_logdist_band(
             self,
@@ -216,7 +255,8 @@ class GeoTripletDataset(Dataset):
         # Row in the *split-specific* difficulty_scores matrix
         anchor_row = self.tid_to_row[anchor_tid]
 
-        row_of_diffs = self.difficulty_scores[anchor_row]  # shape (N,) for all TIDs in this split
+        row_of_diffs = self._get_distance_row(anchor_row)
+
         mask = (
                 (row_of_diffs >= difficulty.min_distance) &
                 (row_of_diffs <= difficulty.max_distance)
@@ -241,30 +281,50 @@ class GeoTripletDataset(Dataset):
             return None
 
         # Pick one TID at random, then pick one local index from that TID
-        chosen_tid = np.random.choice(valid_tids)
+        chosen_tid = self.rng.choice(valid_tids)
         neg_candidates = self.target_to_indices[chosen_tid]
-        neg_local_index = np.random.choice(neg_candidates)
+        neg_local_index = int(self.rng.choice(neg_candidates))
 
         return neg_local_index
 
     def _get_image(self, local_idx: int) -> np.ndarray:
         """
-        Retrieve the raw numpy image from /images/data for the given local index
-        (which maps to a global index in valid_indices).
+        Retrieve raw uint8 image array given *local* index.
         """
-        if local_idx in self.cache:
-            return self.cache[local_idx]
-
         global_idx = self.valid_indices[local_idx]
-        image = self.h5_file['images']['data'][global_idx]
+        if global_idx in self.cache:
+            return self.cache[global_idx]
 
-        # Simple cache to avoid repeated HDF5 reads
+        img = self.h5_file['images']['data'][global_idx]
+
         if len(self.cache) >= self.cache_size:
-            remove_key = np.random.choice(list(self.cache.keys()))
-            del self.cache[remove_key]
+            self.cache.pop(next(iter(self.cache)))
+        self.cache[global_idx] = img
+        return img
 
-        self.cache[local_idx] = image
-        return image
+    def _get_tensor(self, local_idx: int) -> torch.Tensor:
+        """
+        Load image, apply transforms, return CHW float tensor in [0,1],
+        with caching of the final tensor.
+        """
+        if local_idx in self.tensor_cache:
+            return self.tensor_cache[local_idx]
+
+        img = self._get_image(local_idx)
+        img_pil = Image.fromarray(img)
+
+        if self.transform:
+            img_pil = self.transform(img_pil)
+
+        if isinstance(img_pil, torch.Tensor):
+            tensor = img_pil
+        else:
+            tensor = to_tensor(img_pil)  # uses torchvision, fast C
+        # LRU
+        if len(self.tensor_cache) >= self.cache_size:
+            self.tensor_cache.pop(next(iter(self.tensor_cache)))
+        self.tensor_cache[local_idx] = tensor
+        return tensor
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -283,51 +343,15 @@ class GeoTripletDataset(Dataset):
             # If there's no other index with the same TID, anchor=positive
             positive_idx = anchor_idx
         else:
-            positive_idx = np.random.choice(positive_candidates)
+            positive_idx = self.rng.choice(positive_candidates)
 
         # Negative: pick based on difficulty
         negative_idx = self._get_negative_sample(anchor_idx)
 
-        # Load images
-        anchor_img = self._get_image(anchor_idx)
-        positive_img = self._get_image(positive_idx)
-        negative_img = self._get_image(negative_idx)
-
-        # Convert to PIL
-        anchor_pil = Image.fromarray(anchor_img)
-        positive_pil = Image.fromarray(positive_img)
-        negative_pil = Image.fromarray(negative_img)
-
-        # Apply optional transforms
-        if self.transform:
-            anchor_pil = self.transform(anchor_pil)
-            positive_pil = self.transform(positive_pil)
-            negative_pil = self.transform(negative_pil)
-
-        # Convert to Tensors if transforms haven't already
-        if not isinstance(anchor_pil, torch.Tensor):
-            anchor_tensor = self._pil_to_tensor(anchor_pil)
-        else:
-            anchor_tensor = anchor_pil
-
-        if not isinstance(positive_pil, torch.Tensor):
-            positive_tensor = self._pil_to_tensor(positive_pil)
-        else:
-            positive_tensor = positive_pil
-
-        if not isinstance(negative_pil, torch.Tensor):
-            negative_tensor = self._pil_to_tensor(negative_pil)
-        else:
-            negative_tensor = negative_pil
-
+        anchor_tensor = self._get_tensor(anchor_idx)
+        positive_tensor = self._get_tensor(positive_idx)
+        negative_tensor = self._get_tensor(negative_idx)
         return anchor_tensor, positive_tensor, negative_tensor
-
-    def _pil_to_tensor(self, img_pil: Image.Image) -> torch.Tensor:
-        """
-        Convert a PIL Image to torch.Tensor in [0,1], shape (C,H,W).
-        """
-        arr = np.array(img_pil, dtype=np.uint8)
-        return torch.from_numpy(arr).permute(2, 0, 1).float() / 255.0
 
     def __len__(self) -> int:
         return len(self.valid_indices)
@@ -339,15 +363,18 @@ class GeoTripletDataset(Dataset):
         """
         current_diff = self._select_difficulty_level()
         current_diff.update(loss)
-        # Optional: Log difficulty stats occasionally
-        # if np.random.random() < 0.001:
-        #     logger.info("Current difficulty levels:")
-        #     for i, level in enumerate(self.difficulty_levels):
-        #         logger.info(
-        #             f"Level {i}: {level.min_distance:.4f}-{level.max_distance:.4f}, "
-        #             f"SR={level.success_rate:.2f}, Attempts={level.num_attempts}"
-        #         )
+        logger.info(
+            f"Updated difficulty level: {current_diff.min_distance:.4f} "
+            f"to {current_diff.max_distance:.4f} with success rate "
+            f"{current_diff.success_rate:.4f} and {current_diff.num_attempts} attempts."
+        )
 
     def close(self):
         """Close the HDF5 file."""
         self.h5_file.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
