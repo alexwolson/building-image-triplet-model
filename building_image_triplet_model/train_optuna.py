@@ -28,6 +28,8 @@ from pathlib import Path
 import optuna
 import torch
 from rich.console import Console
+from pytorch_lightning.loggers import WandbLogger
+import wandb
 
 # Local imports: assumes train.py defines GeoTripletDataModule and GeoTripletNet
 from building_image_triplet_model.train import (
@@ -50,6 +52,17 @@ def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
     warmup_epochs = trial.suggest_int("warmup_epochs", 0, 5)
     difficulty_update_freq = trial.suggest_int("difficulty_update_freq", 50, 400, step=50)
     ucb_alpha = trial.suggest_float("ucb_alpha", 0.5, 4.0, step=0.5)
+
+    # ---------- WandB logger ----------
+    run_name = f"trial_{trial.number}"
+    wandb_logger = WandbLogger(
+        project=args.project_name,
+        name=run_name,
+        group=args.group_name or args.study_name,
+        reinit=True,
+        settings=wandb.Settings(start_method="fork")
+    )
+    wandb_logger.log_hyperparams(trial.params)
 
     # ------------------------------------------------------------ #
     data_module = GeoTripletDataModule(
@@ -87,13 +100,14 @@ def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
         devices="auto",
         max_epochs=args.max_epochs,
         precision=args.precision,
-        logger=False,
+        logger=wandb_logger,
         callbacks=[early_stop],
         enable_progress_bar=False,
     )
 
     trainer.fit(model, data_module)
     val_loss = trainer.callback_metrics["val_loss"].item()
+    wandb_logger.experiment.finish()
     return val_loss
 
 
@@ -109,6 +123,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--freeze-backbone", action="store_true")
     parser.add_argument("--precision", default="32",
                         choices=["32", "16-mixed"])
+    parser.add_argument("--project-name", default="geo-triplet-optuna",
+                        help="Weights & Biases project name")
+    parser.add_argument("--group-name", default=None,
+                        help="Optional WandB group (defaults to study-name)")
 
     args = parser.parse_args(argv)
 
