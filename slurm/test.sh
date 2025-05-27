@@ -15,8 +15,8 @@ module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.10.13
 
 cd "${SLURM_TMPDIR}"
 
-DATASET_SRC=/home/awolson/scratch/building-typologies/full_dataset.h5
-DATASET_LOCAL=$SLURM_TMPDIR/full_dataset.h5
+DATASET_SRC=/home/awolson/scratch/building-typologies/dataset_224_geo.h5
+DATASET_LOCAL=$SLURM_TMPDIR/dataset_224_geo.h5
 echo "Copying dataset..."
 cp "${DATASET_SRC}" "${DATASET_LOCAL}"
 if [[ ! -f "${DATASET_LOCAL}" ]]; then
@@ -30,7 +30,7 @@ python -m venv --without-pip "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
 python -m ensurepip --upgrade
 pip install --no-index --upgrade pip
-pip install --no-index -r /home/awolson/repos/building-image-triplet-model/requirements.txt
+pip install --no-index -r /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/requirements.txt
 
 echo "Python environment and dependencies installed"
 
@@ -41,7 +41,7 @@ mkdir -p "${STUDY_DIR}"
 export OPTUNA_STORAGE="sqlite:///${STUDY_DIR}/test_study.db"
 export STUDY_NAME="test_trial"
 
-srun python /home/awolson/repos/building-image-triplet-model/train_optuna.py \
+srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/train_optuna.py \
       --hdf5-path "${DATASET_LOCAL}" \
       --storage "${OPTUNA_STORAGE}" \
       --study-name "${STUDY_NAME}" \

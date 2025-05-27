@@ -21,8 +21,8 @@ module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.10.13
 cd "${SLURM_TMPDIR}"
 
 # Copy HDF5 dataset locally (fast I/O)
-DATASET_SRC=/home/awolson/scratch/building-typologies/full_dataset.h5
-DATASET_LOCAL=$SLURM_TMPDIR/full_dataset.h5
+DATASET_SRC=/home/awolson/scratch/building-typologies/dataset_224_geo.h5
+DATASET_LOCAL=$SLURM_TMPDIR/dataset_224_geo.h5
 echo "[$(date)] Copying dataset to local scratch..."
 cp "${DATASET_SRC}" "${DATASET_LOCAL}"
 if [[ ! -f "${DATASET_LOCAL}" ]]; then
@@ -39,7 +39,7 @@ python -m venv --without-pip "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
 python -m ensurepip --upgrade
 pip install --no-index --upgrade pip
-pip install --no-index -r /home/awolson/repos/building-image-triplet-model/requirements.txt
+pip install --no-index -r /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/requirements.txt
 
 # Optional: Weights & Biases
 wandb login f50b84f86887e45deb950e681475f7fa0f25e1bf
@@ -57,7 +57,7 @@ export STUDY_NAME="building_triplet_v2"
 ###############################################################################
 # 5. Run ONE Optuna trial
 ###############################################################################
-srun python /home/awolson/repos/building-image-triplet-model/train_optuna.py \
+srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/train_optuna.py \
       --hdf5-path "${DATASET_LOCAL}" \
       --storage "${OPTUNA_STORAGE}" \
       --study-name "${STUDY_NAME}" \
