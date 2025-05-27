@@ -3,11 +3,13 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=00:15:00
+#SBATCH --time=01:00:00
 #SBATCH --output=slurm-test-%j.out
 #SBATCH --error=slurm-test-%j.err
 #SBATCH --mail-user=alex.olson@utoronto.ca
 #SBATCH --mail-type=END,FAIL
+
+set -euo pipefail
 
 echo "Starting test job on $(hostname) at $(date)"
 
