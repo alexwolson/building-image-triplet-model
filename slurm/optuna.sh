@@ -57,7 +57,7 @@ export STUDY_NAME="building_triplet_v2"
 ###############################################################################
 # 5. Run ONE Optuna trial
 ###############################################################################
-srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/train_optuna.py \
+srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/building_image_triplet_model/train_optuna.py \
       --hdf5-path "${DATASET_LOCAL}" \
       --storage "${OPTUNA_STORAGE}" \
       --study-name "${STUDY_NAME}" \

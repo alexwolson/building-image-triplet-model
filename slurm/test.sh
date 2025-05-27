@@ -41,7 +41,7 @@ mkdir -p "${STUDY_DIR}"
 export OPTUNA_STORAGE="sqlite:///${STUDY_DIR}/test_study.db"
 export STUDY_NAME="test_trial"
 
-srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/train_optuna.py \
+srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/building_image_triplet_model/train_optuna.py \
       --hdf5-path "${DATASET_LOCAL}" \
       --storage "${OPTUNA_STORAGE}" \
       --study-name "${STUDY_NAME}" \
