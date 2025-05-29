@@ -49,7 +49,6 @@ srun "${VENV_DIR}/bin/python" /home/awolson/projects/def-bussmann/awolson/buildi
       --hdf5-path "${DATASET_LOCAL}" \
       --storage "${OPTUNA_STORAGE}" \
       --study-name "${STUDY_NAME}" \
-      --n-trials 1 \
       --max-epochs 1 \
       --num-workers ${SLURM_CPUS_PER_TASK} \
       --precision 16-mixed \
