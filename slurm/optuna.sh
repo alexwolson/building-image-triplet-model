@@ -2,7 +2,7 @@
 #SBATCH --job-name=triplet-optuna          # Job name (visible in queue)
 #SBATCH --array=0-99                       # 100 independent trials
 #SBATCH --gpus-per-node=1                  # One GPU per task
-#SBATCH --cpus-per-task=8                  # 8 CPU cores
+#SBATCH --cpus-per-task=16                 # 16 CPU cores
 #SBATCH --mem=64G                          # 64 GB system RAM
 #SBATCH --time=12:00:00                    # 12 hours per trial
 #SBATCH --output=slurm-%A_%a.out           # Std‑out (%A: array job‑ID, %a: task‑ID)
@@ -35,11 +35,12 @@ echo "Dataset copied to ${DATASET_LOCAL}"
 # 3. Python environment
 ###############################################################################
 VENV_DIR=$SLURM_TMPDIR/env
-python -m venv --without-pip "${VENV_DIR}"
+python -m venv "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
-python -m ensurepip --upgrade
-pip install --no-index --upgrade pip
-pip install --no-index -r /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/requirements.txt
+"${VENV_DIR}/bin/python" -m pip install --no-index --upgrade pip
+"${VENV_DIR}/bin/python" -m pip install --no-index -r /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/requirements.txt
+# Install the project itself so that its modules can be imported
+"${VENV_DIR}/bin/python" -m pip install --no-index -e /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model
 
 # Optional: Weights & Biases
 wandb login f50b84f86887e45deb950e681475f7fa0f25e1bf

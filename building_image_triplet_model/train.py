@@ -26,7 +26,7 @@ class GeoTripletNet(LightningModule):
             lr: float = 1e-4,
             weight_decay: float = 1e-4,
             warmup_epochs: int = 3,
-            backbone: str = 'tf_efficientnetv2_s.in21k_ft_in1k',
+            backbone: str = 'eva02_base_patch14_224.mim_in22k',
             pretrained: bool = True,
             difficulty_update_freq: int = 100,
             freeze_backbone: bool = False
