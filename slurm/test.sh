@@ -18,14 +18,15 @@ module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.10.13
 cd "${SLURM_TMPDIR}"
 
 DATASET_SRC=/home/awolson/scratch/building-typologies/dataset_224_geo.h5
-DATASET_LOCAL=$SLURM_TMPDIR/dataset_224_geo.h5
-echo "Copying dataset..."
-cp "${DATASET_SRC}" "${DATASET_LOCAL}"
-if [[ ! -f "${DATASET_LOCAL}" ]]; then
-  echo "Dataset copy failed!" >&2
-  exit 1
-fi
-echo "Dataset copied successfully"
+DATASET_LOCAL=/home/awolson/scratch/building-typologies/dataset_224_geo.h5
+# DATASET_LOCAL=$SLURM_TMPDIR/dataset_224_geo.h5
+# echo "Copying dataset..."
+# cp "${DATASET_SRC}" "${DATASET_LOCAL}"
+# if [[ ! -f "${DATASET_LOCAL}" ]]; then
+#   echo "Dataset copy failed!" >&2
+#   exit 1
+# fi
+# echo "Dataset copied successfully"
 
 VENV_DIR=$SLURM_TMPDIR/env
 python -m venv --without-pip "${VENV_DIR}"
