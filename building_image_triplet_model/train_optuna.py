@@ -43,12 +43,12 @@ console = Console()
 def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
     """Single Optuna trial -> returns final validation loss."""
     # ---------------- Hyperparameter suggestions ---------------- #
-    lr = trial.suggest_loguniform("lr", 1e-5, 5e-3)
+    lr = trial.suggest_float("lr", 1e-5, 5e-3, log=True)
     margin = trial.suggest_float("margin", 0.05, 0.5)
     embedding_dim = trial.suggest_categorical("embedding_dim", [128, 256, 512])
     batch_size = trial.suggest_categorical("batch_size", [32, 64, 128])
     num_diff_levels = trial.suggest_int("num_difficulty_levels", 3, 10)
-    weight_decay = trial.suggest_loguniform("weight_decay", 1e-6, 1e-2)
+    weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
     warmup_epochs = trial.suggest_int("warmup_epochs", 0, 5)
     difficulty_update_freq = trial.suggest_int("difficulty_update_freq", 50, 400, step=50)
     ucb_alpha = trial.suggest_float("ucb_alpha", 0.5, 4.0, step=0.5)
@@ -77,7 +77,7 @@ def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
     model = GeoTripletNet(
         lr=lr,
         margin=margin,
-        embedding_dim=embedding_dim,
+        embedding_size=embedding_dim,
         weight_decay=weight_decay,
         warmup_epochs=warmup_epochs,
         freeze_backbone=args.freeze_backbone,
@@ -149,8 +149,11 @@ def main(argv: list[str] | None = None) -> None:
     # Each cluster job runs exactly one trial
     study.optimize(lambda t: objective(t, args), n_trials=1, timeout=None, catch=(Exception,))
 
-    console.print(f"[bold green]Trial completed[/] : {study.trials[-1].params} "
-                  f"val_loss={study.trials[-1].value:.4f}")
+    try:
+        console.print(f"[bold green]Trial completed[/] : {study.trials[-1].params} "
+                      f"val_loss={study.trials[-1].value:.4f}")
+    except Exception as e:
+        console.print(f"[bold red]Trial failed[/] : {e}")
 
 
 if __name__ == "__main__":
