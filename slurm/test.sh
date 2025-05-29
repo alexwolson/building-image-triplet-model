@@ -33,6 +33,8 @@ python -m venv "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
 "${VENV_DIR}/bin/python" -m pip install --no-index --upgrade pip
 "${VENV_DIR}/bin/python" -m pip install --no-index -r /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/requirements.txt
+# Install the project itself so that its modules can be imported
+"${VENV_DIR}/bin/python" -m pip install --no-index -e /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model
 
 echo "Python environment and dependencies installed"
 
