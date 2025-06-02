@@ -280,7 +280,7 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for AdamW')
     parser.add_argument('--warmup_epochs', type=int, default=3, help='Number of warm‑up epochs')
-    parser.add_argument('--samples_per_epoch', type=int, default=10000,
+    parser.add_argument('--samples_per_epoch', type=int, default=5000,
                         help='Number of training samples to use in each epoch')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--precision', type=str, default='16-mixed',

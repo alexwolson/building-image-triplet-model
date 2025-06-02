@@ -4,9 +4,9 @@
 #SBATCH --gpus-per-node=1                  # One GPU per task
 #SBATCH --cpus-per-task=16                 # 16 CPU cores
 #SBATCH --mem=64G                          # 64 GB system RAM
-#SBATCH --time=24:00:00                    # 24 hours per trial
-#SBATCH --output=slurm-%A_%a.out           # Std‑out (%A: array job‑ID, %a: task‑ID)
-#SBATCH --error=slurm-%A_%a.err            # Std‑err
+#SBATCH --time=48:00:00                    # 48 hours per trial
+#SBATCH --output=reports/slurm-%A_%a.out           # Std‑out (%A: array job‑ID, %a: task‑ID)
+#SBATCH --error=reports/slurm-%A_%a.err            # Std‑err
 #SBATCH --mail-user=alex.olson@utoronto.ca
 #SBATCH --mail-type=END,FAIL
 
