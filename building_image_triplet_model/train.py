@@ -1,6 +1,7 @@
 import argparse
 from typing import Optional
 import os
+import math
 
 import torch
 import torch.nn as nn
@@ -279,6 +280,8 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for AdamW')
     parser.add_argument('--warmup_epochs', type=int, default=3, help='Number of warm‑up epochs')
+    parser.add_argument('--samples_per_epoch', type=int, default=10000,
+                        help='Number of training samples to use in each epoch')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--precision', type=str, default='16-mixed',
                         choices=['32', '16-mixed'], help='Training precision')
@@ -301,6 +304,9 @@ def main():
     parser.add_argument("--freeze_backbone", action="store_true", help="Freeze backbone weights")
 
     args = parser.parse_args()
+    # Calculate how many batches should be run each epoch so that roughly
+    # `samples_per_epoch` training samples are processed.
+    steps_per_epoch = math.ceil(args.samples_per_epoch / args.batch_size)
 
     # Set mixed precision
     if not torch.cuda.is_available() and args.precision != '32':
@@ -360,6 +366,7 @@ def main():
     # Initialize trainer
     trainer = Trainer(
         max_epochs=args.max_epochs,
+        limit_train_batches=steps_per_epoch,
         accelerator='auto',
         devices='auto',
         strategy='ddp' if torch.cuda.device_count() > 1 else "auto",
