@@ -58,8 +58,10 @@ export STUDY_NAME="building_triplet_v2"
 ###############################################################################
 # 5. Run ONE Optuna trial
 ###############################################################################
-srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/building_image_triplet_model/train_optuna.py \
-      --hdf5-path "${DATASET_LOCAL}" \
+# Use the new unified train.py CLI and YAML config
+srun python /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/building_image_triplet_model/train.py \
+      --config /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/config.yaml \
+      --optuna \
       --storage "${OPTUNA_STORAGE}" \
       --study-name "${STUDY_NAME}" \
       --max-epochs 20 \

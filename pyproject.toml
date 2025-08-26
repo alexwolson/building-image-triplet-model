@@ -13,9 +13,14 @@ authors = [
 readme = "README.md"
 classifiers = [
     "Programming Language :: Python :: 3",
-    
 ]
-requires-python = "~=3.10.13"
+requires-python = "~=3.12"
+dependencies = [
+    "pyyaml~=6.0.1"
+]
+# Dev dependencies
+[project.optional-dependencies]
+test = ["pytest~=7.4.0"]
 
 [tool.black]
 line-length = 99

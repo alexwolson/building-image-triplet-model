@@ -45,8 +45,10 @@ mkdir -p "${STUDY_DIR}"
 export OPTUNA_STORAGE="sqlite:///${STUDY_DIR}/test_study.db"
 export STUDY_NAME="test_trial"
 
-srun "${VENV_DIR}/bin/python" /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/building_image_triplet_model/train_optuna.py \
-      --hdf5-path "${DATASET_LOCAL}" \
+# Use the new unified train.py CLI and YAML config
+srun "${VENV_DIR}/bin/python" /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/building_image_triplet_model/train.py \
+      --config /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/config.yaml \
+      --optuna \
       --storage "${OPTUNA_STORAGE}" \
       --study-name "${STUDY_NAME}" \
       --max-epochs 1 \

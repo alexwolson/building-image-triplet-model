@@ -1,5 +1,37 @@
-# Data
-/data/
+# Data - be more specific about what to ignore
+data/raw/
+data/interim/
+data/external/
+# Keep processed data that might be small and useful for others
+# data/processed/
+
+# Model files and checkpoints
+models/*.pth
+models/*.ckpt
+models/*.h5
+models/*.pb
+models/*.onnx
+models/checkpoints/
+models/saved_models/
+
+# Logs and outputs
+logs/
+outputs/
+runs/
+wandb/
+mlruns/
+tensorboard_logs/
+
+# Large files and datasets
+*.csv
+*.json
+*.parquet
+*.hdf5
+*.h5
+*.npy
+*.npz
+*.pkl
+*.pickle
 
 # Mac OS-specific storage files
 .DS_Store
@@ -120,7 +152,7 @@ ipython_config.py
 #poetry.lock
 
 # pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
 #pdm.lock
 #   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
 #   in version control.

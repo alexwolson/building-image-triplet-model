@@ -1,51 +1,56 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
-import h5py
-import pandas as pd
-import numpy as np
-from PIL import Image
-from typing import Optional, Tuple, List, Dict, Iterator
-import logging
 import argparse
-from sklearn.model_selection import train_test_split
-from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
-import warnings
+from concurrent.futures import Executor as BaseExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
-import sys
 import gc
 from itertools import islice
+import logging
+from pathlib import Path
+import sys
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+import warnings
 
-import torch
-import timm
-from torchvision import transforms
+from PIL import Image
+import h5py
+from h5py import Dataset
+import numpy as np
+import psutil
+import pandas as pd
 from scipy.spatial import distance as sdist
+from sklearn.model_selection import train_test_split
+import timm
+import torch
+from torchvision import transforms
+import torchvision.transforms.functional as TF
+from tqdm import tqdm
+import yaml
 
-from concurrent.futures import ProcessPoolExecutor as Executor
 
 @dataclass
 class ProcessingConfig:
     """Configuration for dataset processing."""
-    input_dir: Path 
+
+    input_dir: Path
     output_file: Path
     metadata_file: Path
     n_samples: Optional[int]
-    batch_size: int = 100  # Number of images to process at once
+    batch_size: int = 100
     val_size: float = 0.15
     test_size: float = 0.15
-    compression: str = 'lzf'
     image_size: int = 224
     num_workers: int = 4
-    difficulty_metric: str = 'geo'   # 'geo', 'pixel', or 'cnn'
-    feature_model: str = 'resnet18'  # used when difficulty_metric == 'cnn'
+    difficulty_metric: str = "geo"  # 'geo', 'pixel', or 'cnn'
+    feature_model: str = "resnet18"  # used when difficulty_metric == 'cnn'
     chunk_size: Tuple[int, int, int, int] = (1, 224, 224, 3)
+    knn_k: int = 512  # number of nearest neighbours to store per target
 
-    def __post_init__(self):
-        # ensure split fractions are valid
+    def __post_init__(self) -> None:
         if self.val_size + self.test_size >= 1.0:
             raise ValueError("val_size + test_size must be < 1.0")
         self.chunk_size = (1, self.image_size, self.image_size, 3)
+
 
 class ImageValidator:
     """Validates and processes images."""
@@ -59,93 +64,74 @@ class ImageValidator:
         logger = logging.getLogger(__name__)
         try:
             with warnings.catch_warnings():
-                warnings.filterwarnings('error')
+                warnings.filterwarnings("error")
                 with Image.open(image_path) as img:
-                    if img.format not in ['JPEG', 'JPG']:
+                    if img.format not in ["JPEG", "JPG"]:
                         logger.warning(f"Unsupported format {img.format} for {image_path}")
                         return None
-
-                    # Convert to RGB if necessary
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
-
-                    # Center‑crop to square before resize
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
                     w, h = img.size
                     if w != h:
                         side = min(w, h)
                         left = (w - side) // 2
-                        top  = (h - side) // 2
+                        top = (h - side) // 2
                         img = img.crop((left, top, left + side, top + side))
-
-                    # Resize to target size to ensure consistent memory usage
                     img = img.resize((image_size, image_size), Image.Resampling.LANCZOS)
-
-                    # Convert to numpy array and ensure uint8 type
                     img_array = np.array(img, dtype=np.uint8)
-
-                    # Clear PIL image from memory
                     img.close()
                     del img
-
                     return img_array
         except Exception as e:
             logger.error(f"Error processing {image_path}: {str(e)}")
             return None
         finally:
-            # Force garbage collection
             gc.collect()
 
-def batched(iterable, batch_size: int) -> Iterator:
+
+def batched(iterable: Any, batch_size: int) -> Iterator:
     """Yield batches from an iterable."""
     iterator = iter(iterable)
     while batch := list(islice(iterator, batch_size)):
         yield batch
 
+
 class DatasetProcessor:
     """Main class for processing the building typology dataset."""
 
     def __init__(self, config: ProcessingConfig):
-        self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.config: ProcessingConfig = config
+        self.logger: logging.Logger = logging.getLogger(__name__)
 
-    def _setup_logging(self):
+    def _setup_logging(self) -> None:
         self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
-            fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-            sh  = logging.StreamHandler(sys.stdout); sh.setFormatter(fmt)
-            fh  = logging.FileHandler('dataset_processing.log'); fh.setFormatter(fmt)
-            self.logger.addHandler(sh); self.logger.addHandler(fh)
+            fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+            sh = logging.StreamHandler(sys.stdout)
+            sh.setFormatter(fmt)
+            fh = logging.FileHandler("dataset_processing.log")
+            fh.setFormatter(fmt)
+            self.logger.addHandler(sh)
+            self.logger.addHandler(fh)
 
     def _read_metadata(self) -> pd.DataFrame:
         """
-        Stream‑read the metadata CSV.
-
-        If n_samples is None  → return the full dataframe (chunk‑concatenated).
-
-        If n_samples is set   → perform a two‑pass read so that every TargetID
-                                has equal probability of being chosen, without
-                                loading the whole file at once.
-
-        1st pass: collect the unique TargetIDs with a running reservoir‑sample
-                  (if the file is huge). 2nd pass: read again, keeping only the
-                  rows whose TargetID is in the final sample set.
+        Stream‑read the metadata CSV. If n_samples is None, return the full dataframe.
+        If n_samples is set, perform a two‑pass read so that every TargetID has equal probability of being chosen.
         """
         chunksize = 10000
         if self.config.n_samples is None:
-            # simple concatenate
             self.logger.info("Reading full metadata (no sampling)...")
             return pd.concat(
                 pd.read_csv(self.config.metadata_file, chunksize=chunksize),
                 ignore_index=True,
             )
-
-        # ---------- PASS 1: reservoir sample unique TargetIDs ----------
-        reservoir = []
+        reservoir: List[Any] = []
         seen = set()
         total_unique = 0
         rng = np.random.default_rng()
-        self.logger.info("Pass 1/2: reservoir‑sampling TargetIDs…")
-        for chunk in pd.read_csv(self.config.metadata_file, chunksize=chunksize, usecols=["TargetID"]):
+        self.logger.info("Pass 1/2: reservoir‑sampling TargetIDs…")
+        for chunk in pd.read_csv(self.config.metadata_file, chunksize=chunksize, usecols=["TargetID"]):  # type: ignore
             for tid in chunk["TargetID"]:
                 if tid in seen:
                     continue
@@ -157,346 +143,410 @@ class DatasetProcessor:
                     j = rng.integers(0, total_unique)
                     if j < self.config.n_samples:
                         reservoir[j] = tid
-
-        self.logger.info(
-            f"Discovered {total_unique} unique TargetIDs; sampled {len(reservoir)}."
-        )
+        self.logger.info(f"Discovered {total_unique} unique TargetIDs; sampled {len(reservoir)}.")
         sample_set = set(reservoir)
-
-        # ---------- PASS 2: collect rows for sampled IDs ----------
-        keep_chunks = []
-        usecols = None  # read all columns now
-        self.logger.info("Pass 2/2: collecting sampled rows…")
+        keep_chunks: List[pd.DataFrame] = []
+        self.logger.info("Pass 2/2: collecting sampled rows…")
         for chunk in pd.read_csv(self.config.metadata_file, chunksize=chunksize):
-            keep = chunk[chunk["TargetID"].isin(sample_set)]
+            # Use a set of strings for fast lookup and type safety
+            sample_set_str = set(str(x) for x in sample_set)
+            keep_indices = [i for i, x in enumerate(chunk["TargetID"]) if str(x) in sample_set_str]
+            keep = chunk.iloc[keep_indices]
             if not keep.empty:
                 keep_chunks.append(keep)
-
         df_sampled = pd.concat(keep_chunks, ignore_index=True)
         return df_sampled
 
-    def _create_splits(self, target_ids: np.ndarray) -> Dict[str, np.ndarray]:
+    def _create_splits(self, target_ids: Any) -> Dict[str, Any]:
         """Create train/val/test splits based on TargetID."""
+        target_ids = np.array(target_ids)
         train_targets, temp_targets = train_test_split(
-            target_ids,
-            test_size=self.config.val_size + self.config.test_size,
-            random_state=42
+            target_ids, test_size=self.config.val_size + self.config.test_size, random_state=42
         )
-
-        # Proportionally split val & test from 'temp_targets'
         relative_test_size = self.config.test_size / (self.config.val_size + self.config.test_size)
         val_targets, test_targets = train_test_split(
-            temp_targets,
-            test_size=relative_test_size,
-            random_state=42
+            temp_targets, test_size=relative_test_size, random_state=42
         )
-
-        return {
-            'train': train_targets,
-            'val': val_targets,
-            'test': test_targets
-        }
+        return {"train": train_targets, "val": val_targets, "test": test_targets}
 
     def _process_image_batch(self, batch_rows: pd.DataFrame) -> List[Optional[np.ndarray]]:
         """Process a batch of images in parallel."""
-        results = []
-        ExecCls = Executor if self.config.difficulty_metric != 'pixel' else ThreadPoolExecutor
+        results: List[Optional[np.ndarray]] = []
+        ExecCls: type[BaseExecutor] = (
+            ProcessPoolExecutor if self.config.difficulty_metric != "pixel" else ThreadPoolExecutor
+        )
         with ExecCls(max_workers=self.config.num_workers) as executor:
             futures = []
             for _, row in batch_rows.iterrows():
-                image_path = self.config.input_dir / str(row['Subdirectory']).zfill(4) / row['Image filename']
-                futures.append(executor.submit(ImageValidator.validate_and_process, image_path, self.config.image_size))
-
+                image_path = (
+                    self.config.input_dir
+                    / str(row["Subdirectory"]).zfill(4)
+                    / row["Image filename"]
+                )
+                futures.append(
+                    executor.submit(
+                        ImageValidator.validate_and_process, image_path, self.config.image_size
+                    )
+                )
             for future in futures:
                 try:
                     results.append(future.result())
                 except Exception as e:
                     self.logger.error(f"Error in batch processing: {str(e)}")
                     results.append(None)
-
         return results
 
     def _initialize_hdf5(self, n_images: int, metadata_df: pd.DataFrame) -> h5py.File:
         """Initialize HDF5 file with proper chunking and compression for images & metadata."""
-        f = h5py.File(self.config.output_file, 'w')
-
-        # Create main groups
-        images_group = f.create_group('images')
-        f.create_group('metadata')
-        f.create_group('splits')
-
-        # Create resizable dataset for images
+        f = h5py.File(self.config.output_file, "w")
+        images_group = f.create_group("images")
+        f.create_group("metadata")
+        f.create_group("splits")
+        # Pre-allocate the full image dataset to avoid costly resizes on large corpora
         images_group.create_dataset(
-            'data',
-            shape=(0, self.config.image_size, self.config.image_size, 3),
-            maxshape=(None, self.config.image_size, self.config.image_size, 3),
+            "data",
+            shape=(n_images, self.config.image_size, self.config.image_size, 3),
             dtype=np.uint8,
             chunks=self.config.chunk_size,
-            compression=self.config.compression
+            compression="lzf",
         )
-
-        # Create dataset for valid image indices
         images_group.create_dataset(
-            'valid_indices',
-            shape=(0,),
-            maxshape=(n_images,),
-            dtype=np.int64,
-            compression=self.config.compression
+            "valid_mask",
+            shape=(n_images,),
+            dtype=np.bool_,
+            compression="lzf",
         )
-
         return f
 
     def _compute_and_store_difficulty_scores_for_split(
-            self,
-            h5_file: h5py.File,
-            df: pd.DataFrame,
-            split_target_ids: np.ndarray,
-            split_name: str
-    ):
-        metric = self.config.difficulty_metric
-        self.logger.info(f"Computing '{split_name}' scores with metric='{metric}'.")
+        self,
+        h5_file: h5py.File,
+        split_target_ids: np.ndarray,
+        split_name: str,
+        metric: str,
+        all_targets: np.ndarray,
+        embeddings_all: np.ndarray,
+    ) -> None:
+        """Slice cached embeddings for the split and store distance matrix."""
+        self.logger.info(
+            f"Computing distance matrix for split='{split_name}', metric='{metric}', "
+            f"|targets|={len(split_target_ids)}"
+        )
+        # Ensure target order matches cached embeddings order
+        target_rows = np.searchsorted(all_targets, np.sort(split_target_ids))
+        embeddings = embeddings_all[target_rows]
+        n = embeddings.shape[0]
+        meta_grp = h5_file["metadata"]
+        # Store target_id_order only once per split to avoid duplicates
+        tgt_key = f"target_id_order_{split_name}"
+        if tgt_key not in meta_grp:  # type: ignore[operator]
+            meta_grp.create_dataset(  # type: ignore
+                tgt_key,
+                data=np.sort(split_target_ids).astype(np.int64),
+                compression="lzf",
+            )
+        process = psutil.Process()
+        k = self.config.knn_k
+        idx_ds = meta_grp.create_dataset(  # type: ignore
+            f"knn_indices_{metric}_{split_name}",
+            shape=(n, k),
+            dtype="int32",
+            chunks=(min(1024, n), k),
+            compression="gzip",
+            compression_opts=4,
+        )
+        dist_ds = meta_grp.create_dataset(  # type: ignore
+            f"knn_distances_{metric}_{split_name}",
+            shape=(n, k),
+            dtype="float16",
+            chunks=(min(1024, n), k),
+            compression="gzip",
+            compression_opts=4,
+        )
+        chunk_rows = 1024
+        start = 0
+        while start < n:
+            end = min(start + chunk_rows, n)
+            try:
+                block = sdist.cdist(
+                    embeddings[start:end], embeddings, metric="euclidean"
+                ).astype(np.float32)
+            except MemoryError:
+                # Reduce chunk size and retry
+                if chunk_rows <= 128:
+                    raise  # cannot reduce further
+                chunk_rows //= 2
+                self.logger.warning(
+                    f"MemoryError computing block {start}:{end}. Reducing chunk_rows to {chunk_rows}."
+                )
+                continue  # retry with smaller chunk
 
-        targets = np.sort(split_target_ids)
+            if metric == "geo":
+                block = np.log1p(block, dtype=np.float32)
 
-        # ------------------------------------------------------------------
-        # Build per‑target embeddings
-        # ------------------------------------------------------------------
-        if metric == 'geo':
+            # For each row in block, select k nearest neighbours (excluding self)
+            for row_idx, row in enumerate(block):
+                global_row = start + row_idx
+                row[global_row] = np.inf  # set self-distance high
+                nearest_idx = np.argpartition(row, k)[:k]
+                nearest_dist = row[nearest_idx]
+                order = np.argsort(nearest_dist)
+                idx_ds[global_row] = nearest_idx[order].astype(np.int32)
+                dist_ds[global_row] = nearest_dist[order].astype(np.float16)
+
+            # Log memory usage periodically
+            if (start // chunk_rows) % 10 == 0:
+                mem_gb = process.memory_info().rss / (1024 ** 3)
+                self.logger.info(
+                    f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}"
+                )
+
+            start = end
+        self.logger.info(f"{split_name}: stored {metric} matrix of shape {n}×{n}.")
+
+    # ---------------------------------------------------------------------
+    # Embedding computation (once per metric)
+    # ---------------------------------------------------------------------
+
+    def _compute_embeddings_for_metric(
+        self, df: pd.DataFrame, metric: str
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return (sorted_target_ids, embeddings) for the given metric."""
+        self.logger.info(f"Computing embeddings for metric='{metric}' ...")
+        targets = np.sort(np.asarray(df["TargetID"].unique(), dtype=np.int64))
+        if metric == "geo":
             embeddings = (
-                df[df['TargetID'].isin(targets)]
-                .groupby('TargetID')[['Target Point Latitude', 'Target Point Longitude']]
+                df.groupby("TargetID")[["Target Point Latitude", "Target Point Longitude"]]
                 .first()
                 .loc[targets]
                 .values.astype(np.float32)
             )
-
-        elif metric == 'pixel':
-            imgs_per_tid = []
-            for tid in tqdm(targets, desc=f"Pixel imgs ({split_name})", leave=False):
-                rows = df[df['TargetID'] == tid]
-                vecs = []
+        elif metric == "pixel":
+            imgs_per_tid: List[np.ndarray] = []
+            for tid in tqdm(targets, desc="Pixel imgs (all)", leave=False):
+                rows = df[df["TargetID"] == tid]
+                vecs: List[np.ndarray] = []
                 for _, row in rows.iterrows():
-                    p = self.config.input_dir / str(row['Subdirectory']).zfill(4) / row['Image filename']
+                    p = (
+                        self.config.input_dir
+                        / str(row["Subdirectory"]).zfill(4)
+                        / row["Image filename"]
+                    )
                     arr = ImageValidator.validate_and_process(p, self.config.image_size)
                     if arr is not None:
                         vecs.append(arr.reshape(-1).astype(np.float32))
                 if not vecs:
-                    vecs.append(np.zeros(self.config.image_size**2 * 3, np.float32))
+                    vecs.append(np.zeros(self.config.image_size ** 2 * 3, np.float32))
                 imgs_per_tid.append(np.mean(vecs, axis=0))
             embeddings = np.stack(imgs_per_tid, dtype=np.float32)
-
-        elif metric == 'cnn':
+        elif metric == "cnn":
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            model = getattr(self, "_feature_model", None)
-            if model is None:
-                model = timm.create_model(self.config.feature_model, pretrained=True, num_classes=0).eval().to(device)
-                self._feature_model = model
-            prep = transforms.Compose([
-                transforms.Lambda(
-                    lambda img: transforms.functional.center_crop(img, min(img.size))
-                ),
-                transforms.Resize((self.config.image_size, self.config.image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225]),
-            ])
+            model = (
+                timm.create_model(self.config.feature_model, pretrained=True, num_classes=0)
+                .eval()
+                .to(device)
+            )
+            prep = transforms.Compose(
+                [
+                    transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
+                    transforms.Resize((self.config.image_size, self.config.image_size)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]
+            )
+            feats_per_tid: Dict[Any, List[np.ndarray]] = {tid: [] for tid in targets}
 
-            feats_per_tid = {tid: [] for tid in targets}
-            batch_imgs, batch_tids = [], []
+            def img_iter():
+                for _, row in df.iterrows():
+                    yield row
 
-            for _, row in tqdm(df[df['TargetID'].isin(targets)].iterrows(),
-                               total=len(df[df['TargetID'].isin(targets)]),
-                               desc=f"CNN feats ({split_name})", leave=False):
-                img_path = self.config.input_dir / str(row['Subdirectory']).zfill(4) / row['Image filename']
+            batch_imgs: List[torch.Tensor] = []
+            batch_tids: List[Any] = []
+            for row in tqdm(img_iter(), total=len(df), desc="CNN feats (all)"):
+                img_path = (
+                    self.config.input_dir
+                    / str(row["Subdirectory"]).zfill(4)
+                    / row["Image filename"]
+                )
                 with Image.open(img_path) as im:
-                    batch_imgs.append(prep(im.convert("RGB")))
-                batch_tids.append(row['TargetID'])
-
-                if len(batch_imgs) == 128:
+                    tensor_img = prep(im.convert("RGB"))
+                    if isinstance(tensor_img, torch.Tensor):
+                        batch_imgs.append(tensor_img)
+                batch_tids.append(row["TargetID"])
+                if len(batch_imgs) == 256:
                     with torch.no_grad():
                         out = model(torch.stack(batch_imgs).to(device)).cpu().numpy()
                     for t, f in zip(batch_tids, out):
                         feats_per_tid[t].append(f.astype(np.float32))
                     batch_imgs, batch_tids = [], []
-
-            # leftover
             if batch_imgs:
                 with torch.no_grad():
                     out = model(torch.stack(batch_imgs).to(device)).cpu().numpy()
                 for t, f in zip(batch_tids, out):
                     feats_per_tid[t].append(f.astype(np.float32))
-
-            embeddings = np.stack([np.mean(feats_per_tid[tid], axis=0) for tid in targets], dtype=np.float32)
-
+            embeddings = np.stack(
+                [np.mean(feats_per_tid[tid], axis=0) for tid in targets], dtype=np.float32
+            )
         else:
             raise ValueError(f"Unknown metric {metric}")
+        self.logger.info(f"Finished embeddings for metric='{metric}'. Shape: {embeddings.shape}")
+        return targets, embeddings
 
-        # ------------------------------------------------------------------
-        # Pairwise distance matrix → HDF5 (streamed)
-        # ------------------------------------------------------------------
-        n = len(targets)
-        meta_grp = h5_file["metadata"]
-
-        meta_grp.create_dataset(
-            f"target_id_order_{split_name}",
-            data=targets.astype(np.int64),
-            compression=self.config.compression,
-        )
-        ds = meta_grp.create_dataset(
-            f"difficulty_scores_{split_name}",
-            shape=(n, n),
-            dtype="float16",
-            chunks=(min(1024, n), n),
-            compression=self.config.compression,
-        )
-
-        for start in tqdm(range(0, n, 1024), desc=f"{split_name} dist rows", leave=False):
-            end = min(start + 1024, n)
-            block = sdist.cdist(embeddings[start:end], embeddings, metric='euclidean').astype(np.float32)
-            if metric == 'geo':
-                block = np.log1p(block, dtype=np.float32)
-            ds[start:end] = block.astype(np.float16)
-
-        self.logger.info(f"{split_name}: stored {metric} matrix of shape {n}×{n}.")
-
-    def process_dataset(self):
+    def process_dataset(self) -> None:
         """Main method to process the dataset."""
         self._setup_logging()
         self.logger.info("Starting dataset processing...")
-
-        # 1) Read metadata
         metadata_df = self._read_metadata()
         n_images = len(metadata_df)
         self.logger.info(f"Processing {n_images} image rows from metadata.")
-
-        # 2) Create splits
-        target_ids = metadata_df['TargetID'].unique()
+        target_ids = metadata_df["TargetID"].unique()
         splits = self._create_splits(target_ids)
-
-        # 3) Initialize HDF5 file
         h5_file = self._initialize_hdf5(n_images, metadata_df)
-
         try:
-            # 4) Store splits in HDF5
             for split_name, split_targets in splits.items():
-                h5_file['splits'].create_dataset(
-                    split_name,
-                    data=split_targets,
-                    compression=self.config.compression
+                h5_file["splits"].create_dataset(  # type: ignore
+                    split_name, data=split_targets, compression="lzf"
                 )
-
-            # 5) Store entire metadata as columns in /metadata
+            # Store metadata columns, handling strings explicitly for HDF5 compatibility
             for col in metadata_df.columns:
-                h5_file['metadata'].create_dataset(
-                    col,
-                    data=metadata_df[col].values,
-                    compression=self.config.compression
+                col_data = metadata_df[col].values
+                if col_data.dtype == object or col_data.dtype.kind in {"U", "S"}:
+                    # Encode unicode/object strings as UTF-8 variable-length strings
+                    dt = h5py.string_dtype(encoding="utf-8")
+                    h5_file["metadata"].create_dataset(  # type: ignore
+                        col,
+                        data=col_data.astype("U"),
+                        dtype=dt,
+                        compression="lzf",
+                    )
+                else:
+                    h5_file["metadata"].create_dataset(  # type: ignore
+                        col,
+                        data=col_data,
+                        compression="lzf",
+                    )
+            # ------------------------------------------------------------------
+            # 1. Compute embeddings once per metric for ALL targets
+            # ------------------------------------------------------------------
+            embeddings_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+            for metric in ["geo", "pixel", "cnn"]:
+                embeddings_cache[metric] = self._compute_embeddings_for_metric(metadata_df, metric)
+
+            # ------------------------------------------------------------------
+            # 2. For each split, slice embeddings and write distance matrices
+            # ------------------------------------------------------------------
+            for metric in ["geo", "pixel", "cnn"]:
+                all_tgts, embeds = embeddings_cache[metric]
+                self._compute_and_store_difficulty_scores_for_split(
+                    h5_file,
+                    splits["train"],
+                    "train",
+                    metric,
+                    all_tgts,
+                    embeds,
                 )
-
-            # 6) Compute and store difficulty scores for each split separately
-            self._compute_and_store_difficulty_scores_for_split(
-                h5_file,
-                metadata_df,
-                splits['train'],
-                'train'
-            )
-
-            # Run Intermediate Garbage Collection
-            gc.collect()
-
-            self._compute_and_store_difficulty_scores_for_split(
-                h5_file,
-                metadata_df,
-                splits['val'],
-                'val'
-            )
-
-            # Run Intermediate Garbage Collection
-            gc.collect()
-
-            self._compute_and_store_difficulty_scores_for_split(
-                h5_file,
-                metadata_df,
-                splits['test'],
-                'test'
-            )
-
-            # Run Intermediate Garbage Collection
-            gc.collect()
-
-            # 7) Process images in batches
-            current_idx = 0
-            valid_indices = []
-
-            for batch_idx, batch in enumerate(tqdm(
+                gc.collect()
+                self._compute_and_store_difficulty_scores_for_split(
+                    h5_file,
+                    splits["val"],
+                    "val",
+                    metric,
+                    all_tgts,
+                    embeds,
+                )
+                gc.collect()
+                self._compute_and_store_difficulty_scores_for_split(
+                    h5_file,
+                    splits["test"],
+                    "test",
+                    metric,
+                    all_tgts,
+                    embeds,
+                )
+                gc.collect()
+            current_idx = 0  # Global row counter in metadata_df order
+            valid_indices: List[int] = []
+            images_data = h5_file["images/data"]
+            valid_mask_ds = h5_file["images/valid_mask"]
+            for batch_idx, batch in enumerate(
+                tqdm(
                     batched(metadata_df.iterrows(), self.config.batch_size),
-                    total=(len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size,
-                    desc="Processing batches"
-            )):
+                    total=(len(metadata_df) + self.config.batch_size - 1)
+                    // self.config.batch_size,
+                    desc="Processing batches",
+                )
+            ):
                 batch_df = pd.DataFrame([row for _, row in batch])
                 processed_images = self._process_image_batch(batch_df)
-
-                # Filter out None values and get valid images
-                valid_batch_images = []
-                valid_batch_indices = []
-
                 for i, img in enumerate(processed_images):
-                    if img is not None:
-                        valid_batch_images.append(img)
-                        valid_batch_indices.append(current_idx + i)
-
-                if valid_batch_images:
-                    # Resize dataset and store batch
-                    current_size = h5_file['images/data'].shape[0]
-                    new_size = current_size + len(valid_batch_images)
-                    h5_file['images/data'].resize(new_size, axis=0)
-                    h5_file['images/data'][current_size:new_size] = valid_batch_images
-
-                    valid_indices.extend(valid_batch_indices)
-
+                    global_idx = current_idx + i
+                    if img is not None and isinstance(images_data, Dataset):
+                        images_data[global_idx] = img  # type: ignore[index]
+                        if isinstance(valid_mask_ds, Dataset):
+                            valid_mask_ds[global_idx] = True  # type: ignore[index]
+                        valid_indices.append(global_idx)
                 current_idx += len(processed_images)
-
-                # Clear memory
                 del processed_images
-                del valid_batch_images
                 gc.collect()
-
-            # 8) Store valid indices
-            h5_file['images/valid_indices'].resize(len(valid_indices), axis=0)
-            h5_file['images/valid_indices'][:] = valid_indices
-
+            # Store valid_indices as a compact dataset for backward compatibility
+            images_group = h5_file["images"]  # type: ignore[assignment]
+            images_group.create_dataset(  # type: ignore[attr-defined]
+                "valid_indices",
+                data=np.asarray(valid_indices, dtype=np.int64),
+                compression="lzf",
+            )
         finally:
             h5_file.close()
             gc.collect()
 
-def main():
+
+def main() -> None:
     parser = argparse.ArgumentParser(description="Process building typology dataset")
-    parser.add_argument("--input-dir", type=Path, required=True)
-    parser.add_argument("--output-file", type=Path, required=True)
-    parser.add_argument("--metadata-file", type=Path, required=True)
-    parser.add_argument("--n-samples", type=int, default=None)
-    parser.add_argument("--batch-size", type=int, default=100)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--difficulty-metric", choices=["geo", "pixel", "cnn"], default="geo")
-    parser.add_argument("--feature-model", default="resnet18")
-
+    parser.add_argument("--config", type=Path, default="config.yaml", help="Path to YAML config file")
+    parser.add_argument("--input-dir", type=Path, help="Input directory (overrides config)")
+    parser.add_argument("--output-file", type=Path, help="Output HDF5 file (overrides config)")
+    parser.add_argument("--metadata-file", type=Path, help="Metadata CSV (overrides config)")
+    parser.add_argument("--n-samples", type=int, help="Number of samples (overrides config)")
+    parser.add_argument("--batch-size", type=int, help="Batch size (overrides config)")
+    parser.add_argument("--num-workers", type=int, help="Number of workers (overrides config)")
+    parser.add_argument("--image-size", type=int, help="Image size (overrides config)")
+    parser.add_argument("--difficulty-metric", choices=["geo", "pixel", "cnn"], help="Difficulty metric (overrides config)")
+    parser.add_argument("--feature-model", help="Feature model (overrides config)")
     args = parser.parse_args()
-
+    # Load config from YAML
+    with open(args.config, "r") as f:
+        config_dict = yaml.safe_load(f)
+    # Use 'data' section for all relevant fields
+    data_cfg = config_dict.get("data", {})
+    # Override with CLI if provided
+    input_dir = args.input_dir or Path(data_cfg.get("input_dir", "data/raw"))
+    output_file = args.output_file or Path(data_cfg.get("hdf5_path", "data/processed/dataset.h5"))
+    metadata_file = args.metadata_file or Path(data_cfg.get("metadata_file", "data/metadata.csv"))
+    n_samples = args.n_samples if args.n_samples is not None else data_cfg.get("n_samples", None)
+    batch_size = args.batch_size if args.batch_size is not None else data_cfg.get("batch_size", 100)
+    num_workers = args.num_workers if args.num_workers is not None else data_cfg.get("num_workers", 4)
+    image_size = args.image_size if args.image_size is not None else data_cfg.get("image_size", 224)
+    difficulty_metric = args.difficulty_metric or data_cfg.get("difficulty_metric", "geo")
+    feature_model = args.feature_model or data_cfg.get("feature_model", "resnet18")
+    # Build ProcessingConfig
     config = ProcessingConfig(
-        input_dir=args.input_dir,
-        output_file=args.output_file,
-        metadata_file=args.metadata_file,
-        n_samples=args.n_samples,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        image_size=args.image_size,
-        difficulty_metric=args.difficulty_metric,
-        feature_model=args.feature_model,
+        input_dir=input_dir,
+        output_file=output_file,
+        metadata_file=metadata_file,
+        n_samples=n_samples,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        image_size=image_size,
+        difficulty_metric=difficulty_metric,
+        feature_model=feature_model,
     )
-
     processor = DatasetProcessor(config)
     processor.process_dataset()
+    # Update YAML config with the processed HDF5 path
+    config_dict.setdefault("data", {})["hdf5_path"] = str(output_file)
+    with open(args.config, "w") as f:
+        yaml.safe_dump(config_dict, f)
+
 
 if __name__ == "__main__":
     main()

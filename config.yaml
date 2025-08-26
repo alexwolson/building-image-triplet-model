@@ -1,0 +1,37 @@
+# Auto batch size tuning
+# Set enabled: true to automatically find the best batch size before training
+# mode: 'power' (default) or 'binsearch'
+auto_batch_size:
+  enabled: true
+  mode: binsearch
+
+data:
+  hdf5_path: "data/processed/dataset.h5"
+  batch_size: 32
+  num_workers: 4
+  num_difficulty_levels: 5
+  ucb_alpha: 2.0
+  cache_size: 1000
+
+model:
+  embedding_size: 128
+  margin: 1.0
+  backbone: "tf_efficientnetv2_s.in21k_ft_in1k"
+  pretrained: true
+  freeze_backbone: false
+
+train:
+  max_epochs: 100
+  lr: 0.0001
+  weight_decay: 0.0001
+  warmup_epochs: 3
+  samples_per_epoch: 5000
+  seed: 42
+  precision: "16-mixed"
+  difficulty_update_freq: 100
+
+logging:
+  project_name: "geo-triplet-net"
+  exp_name: null
+  checkpoint_dir: "checkpoints"
+  offline: false 
