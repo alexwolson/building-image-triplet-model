@@ -1,9 +1,5 @@
-# Data - be more specific about what to ignore
-data/raw/
-data/interim/
-data/external/
-# Keep processed data that might be small and useful for others
-# data/processed/
+# Data - ignore entire data directory
+data/
 
 # Model files and checkpoints
 models/*.pth
