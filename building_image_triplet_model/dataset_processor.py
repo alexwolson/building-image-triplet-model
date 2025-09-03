@@ -34,7 +34,6 @@ class ProcessingConfig:
 
     input_dir: Path
     output_file: Path
-    metadata_file: Path
     n_samples: Optional[int]
     batch_size: int = 100
     val_size: float = 0.15
@@ -115,47 +114,98 @@ class DatasetProcessor:
             self.logger.addHandler(fh)
 
     def _read_metadata(self) -> pd.DataFrame:
+        """Assemble metadata by parsing per-image .txt files on disk.
+
+        Expected layout under input_dir: {dataset_id:04d}/{dataset_id:04d}/{stem}.{jpg,txt}
+        The .txt "d" line encodes: DatasetID, TargetID, PatchID, StreetViewID, followed by
+        Target Point (lat, lon, h), Surface Normal (3), Street View Location (lat, lon, h),
+        Distance, Heading, Pitch, Roll. Only the fields already used downstream are retained.
         """
-        Stream‑read the metadata CSV. If n_samples is None, return the full dataframe.
-        If n_samples is set, perform a two‑pass read so that every TargetID has equal probability of being chosen.
-        """
-        chunksize = 10000
-        if self.config.n_samples is None:
-            self.logger.info("Reading full metadata (no sampling)...")
-            return pd.concat(
-                pd.read_csv(self.config.metadata_file, chunksize=chunksize),
-                ignore_index=True,
-            )
-        reservoir: List[Any] = []
-        seen = set()
-        total_unique = 0
-        rng = np.random.default_rng()
-        self.logger.info("Pass 1/2: reservoir‑sampling TargetIDs…")
-        for chunk in pd.read_csv(self.config.metadata_file, chunksize=chunksize, usecols=["TargetID"]):  # type: ignore
-            for tid in chunk["TargetID"]:
-                if tid in seen:
-                    continue
-                seen.add(tid)
-                total_unique += 1
-                if len(reservoir) < self.config.n_samples:
-                    reservoir.append(tid)
-                else:
-                    j = rng.integers(0, total_unique)
-                    if j < self.config.n_samples:
-                        reservoir[j] = tid
-        self.logger.info(f"Discovered {total_unique} unique TargetIDs; sampled {len(reservoir)}.")
-        sample_set = set(reservoir)
-        keep_chunks: List[pd.DataFrame] = []
-        self.logger.info("Pass 2/2: collecting sampled rows…")
-        for chunk in pd.read_csv(self.config.metadata_file, chunksize=chunksize):
-            # Use a set of strings for fast lookup and type safety
-            sample_set_str = set(str(x) for x in sample_set)
-            keep_indices = [i for i, x in enumerate(chunk["TargetID"]) if str(x) in sample_set_str]
-            keep = chunk.iloc[keep_indices]
-            if not keep.empty:
-                keep_chunks.append(keep)
-        df_sampled = pd.concat(keep_chunks, ignore_index=True)
-        return df_sampled
+        self.logger.info("Scanning .txt metadata files from input directory…")
+        txt_files = list(self.config.input_dir.rglob("*.txt"))
+        if not txt_files:
+            raise FileNotFoundError(f"No .txt metadata files found under {self.config.input_dir}")
+
+        records: List[Dict[str, Any]] = []
+
+        def parse_txt_file(txt_path: Path) -> Optional[Dict[str, Any]]:
+            try:
+                with open(txt_path, "r") as f:
+                    lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+                if not lines:
+                    return None
+                d_line = None
+                for ln in lines:
+                    if ln.startswith("d"):
+                        d_line = ln
+                        break
+                if d_line is None:
+                    return None
+                # Tokenize and drop the leading 'd'
+                parts = d_line.split()
+                if len(parts) < 4 + 3 + 3 + 3 + 4:  # ids + target(3) + normal(3) + street(3) + 4 scalars
+                    return None
+                _, ds_id_str, tgt_id_str, patch_id_str, sv_id_str, *rest = parts
+                # Extract target point (lat, lon, height)
+                if len(rest) < 3:
+                    return None
+                target_lat = float(rest[0])
+                target_lon = float(rest[1])
+                # Build Subpath relative to input_dir (e.g., '0088/0088')
+                subpath = txt_path.parent.relative_to(self.config.input_dir).as_posix()
+                # Determine image filename by probing common extensions
+                stem = txt_path.stem
+                image_filename: Optional[str] = None
+                for ext in (".jpg", ".jpeg"):
+                    candidate = txt_path.with_suffix(ext)
+                    if candidate.exists():
+                        image_filename = candidate.name
+                        break
+                if image_filename is None:
+                    # No paired image; skip
+                    return None
+                return {
+                    "DatasetID": int(ds_id_str),
+                    "TargetID": int(tgt_id_str),
+                    "PatchID": int(patch_id_str),
+                    "StreetViewID": int(sv_id_str),
+                    "Image filename": image_filename,
+                    "Subpath": subpath,
+                    "Target Point Latitude": target_lat,
+                    "Target Point Longitude": target_lon,
+                }
+            except Exception:
+                return None
+
+        for p in tqdm(txt_files, desc="Parsing .txt metadata"):
+            rec = parse_txt_file(p)
+            if rec is not None:
+                records.append(rec)
+
+        if not records:
+            raise RuntimeError("Parsed zero valid metadata records from .txt files")
+
+        df = pd.DataFrame.from_records(records)
+        self.logger.info(f"Assembled {len(df)} rows from {len(txt_files)} .txt files.")
+
+        # Optional sampling by unique TargetID for balanced selection
+        if self.config.n_samples is not None:
+            unique_tids = np.array(sorted(df["TargetID"].unique()))
+            if self.config.n_samples < len(unique_tids):
+                rng = np.random.default_rng()
+                sampled_tids = set(rng.choice(unique_tids, size=self.config.n_samples, replace=False))
+                df = df[df["TargetID"].isin(sampled_tids)].reset_index(drop=True)
+                self.logger.info(
+                    f"Downsampled to {len(df)} rows across {len(sampled_tids)} TargetIDs (n_samples={self.config.n_samples})."
+                )
+        return df
+
+    def _build_image_path(self, row: pd.Series) -> Path:
+        """Construct absolute image path from metadata row."""
+        if "Subpath" in row and isinstance(row["Subpath"], str):
+            return self.config.input_dir / Path(row["Subpath"]) / row["Image filename"]
+        # Fallback for legacy CSV-based structure (not used anymore but kept for safety)
+        return self.config.input_dir / str(row["Subdirectory"]).zfill(4) / row["Image filename"]
 
     def _create_splits(self, target_ids: Any) -> Dict[str, Any]:
         """Create train/val/test splits based on TargetID."""
@@ -178,11 +228,7 @@ class DatasetProcessor:
         with ExecCls(max_workers=self.config.num_workers) as executor:
             futures = []
             for _, row in batch_rows.iterrows():
-                image_path = (
-                    self.config.input_dir
-                    / str(row["Subdirectory"]).zfill(4)
-                    / row["Image filename"]
-                )
+                image_path = self._build_image_path(row)
                 futures.append(
                     executor.submit(
                         ImageValidator.validate_and_process, image_path, self.config.image_size
@@ -327,11 +373,7 @@ class DatasetProcessor:
                 rows = df[df["TargetID"] == tid]
                 vecs: List[np.ndarray] = []
                 for _, row in rows.iterrows():
-                    p = (
-                        self.config.input_dir
-                        / str(row["Subdirectory"]).zfill(4)
-                        / row["Image filename"]
-                    )
+                    p = self._build_image_path(row)
                     arr = ImageValidator.validate_and_process(p, self.config.image_size)
                     if arr is not None:
                         vecs.append(arr.reshape(-1).astype(np.float32))
@@ -363,11 +405,7 @@ class DatasetProcessor:
             batch_imgs: List[torch.Tensor] = []
             batch_tids: List[Any] = []
             for row in tqdm(img_iter(), total=len(df), desc="CNN feats (all)"):
-                img_path = (
-                    self.config.input_dir
-                    / str(row["Subdirectory"]).zfill(4)
-                    / row["Image filename"]
-                )
+                img_path = self._build_image_path(row)
                 with Image.open(img_path) as im:
                     tensor_img = prep(im.convert("RGB"))
                     if isinstance(tensor_img, torch.Tensor):
@@ -415,7 +453,7 @@ class DatasetProcessor:
                     dt = h5py.string_dtype(encoding="utf-8")
                     h5_file["metadata"].create_dataset(  # type: ignore
                         col,
-                        data=col_data.astype("U"),
+                        data=col_data,
                         dtype=dt,
                         compression="lzf",
                     )
@@ -505,7 +543,6 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default="config.yaml", help="Path to YAML config file")
     parser.add_argument("--input-dir", type=Path, help="Input directory (overrides config)")
     parser.add_argument("--output-file", type=Path, help="Output HDF5 file (overrides config)")
-    parser.add_argument("--metadata-file", type=Path, help="Metadata CSV (overrides config)")
     parser.add_argument("--n-samples", type=int, help="Number of samples (overrides config)")
     parser.add_argument("--batch-size", type=int, help="Batch size (overrides config)")
     parser.add_argument("--num-workers", type=int, help="Number of workers (overrides config)")
@@ -521,7 +558,6 @@ def main() -> None:
     # Override with CLI if provided
     input_dir = args.input_dir or Path(data_cfg.get("input_dir", "data/raw"))
     output_file = args.output_file or Path(data_cfg.get("hdf5_path", "data/processed/dataset.h5"))
-    metadata_file = args.metadata_file or Path(data_cfg.get("metadata_file", "data/metadata.csv"))
     n_samples = args.n_samples if args.n_samples is not None else data_cfg.get("n_samples", None)
     batch_size = args.batch_size if args.batch_size is not None else data_cfg.get("batch_size", 100)
     num_workers = args.num_workers if args.num_workers is not None else data_cfg.get("num_workers", 4)
@@ -532,7 +568,6 @@ def main() -> None:
     config = ProcessingConfig(
         input_dir=input_dir,
         output_file=output_file,
-        metadata_file=metadata_file,
         n_samples=n_samples,
         batch_size=batch_size,
         num_workers=num_workers,

@@ -6,12 +6,13 @@ auto_batch_size:
   mode: binsearch
 
 data:
-  hdf5_path: "data/processed/dataset.h5"
-  batch_size: 32
+  input_dir: /media/alex/T5/3D_Street_View/downloads/dataset_unaligned
+  hdf5_path: data/processed/dataset.h5
+  batch_size: 100
   num_workers: 4
-  num_difficulty_levels: 5
-  ucb_alpha: 2.0
-  cache_size: 1000
+  image_size: 224
+  difficulty_metric: geo
+  feature_model: resnet18
 
 model:
   embedding_size: 128
