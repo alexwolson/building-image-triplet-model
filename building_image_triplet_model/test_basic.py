@@ -1,10 +1,10 @@
-from datamodule import GeoTripletDataModule
-from model import GeoTripletNet
+from .datamodule import GeoTripletDataModule
+from .model import GeoTripletNet
 import numpy as np
 import pytest
 from pytorch_lightning import Trainer
 import torch
-from triplet_dataset import GeoTripletDataset
+from .triplet_dataset import GeoTripletDataset
 
 
 class DummyDataset(torch.utils.data.Dataset):

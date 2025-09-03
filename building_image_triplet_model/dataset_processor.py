@@ -44,6 +44,7 @@ class ProcessingConfig:
     feature_model: str = "resnet18"  # used when difficulty_metric == 'cnn'
     chunk_size: Tuple[int, int, int, int] = (1, 224, 224, 3)
     knn_k: int = 512  # number of nearest neighbours to store per target
+    pixel_embedding_downsample_factor: int = 1 # factor to downsample pixel embeddings
 
     def __post_init__(self) -> None:
         if self.val_size + self.test_size >= 1.0:
@@ -55,7 +56,7 @@ class ImageValidator:
     """Validates and processes images."""
 
     @staticmethod
-    def validate_and_process(image_path: Path, image_size: int) -> Optional[np.ndarray]:
+    def validate_and_process(image_path: Path, image_size: int, downsample_factor: int = 1) -> Optional[np.ndarray]:
         """
         Validates and processes an image file.
         Returns None if the image is invalid or corrupted.
@@ -77,6 +78,9 @@ class ImageValidator:
                         top = (h - side) // 2
                         img = img.crop((left, top, left + side, top + side))
                     img = img.resize((image_size, image_size), Image.Resampling.LANCZOS)
+                    if downsample_factor > 1:
+                        new_size = image_size // downsample_factor
+                        img = img.resize((new_size, new_size), Image.Resampling.LANCZOS)
                     img_array = np.array(img, dtype=np.uint8)
                     img.close()
                     del img
@@ -231,7 +235,7 @@ class DatasetProcessor:
                 image_path = self._build_image_path(row)
                 futures.append(
                     executor.submit(
-                        ImageValidator.validate_and_process, image_path, self.config.image_size
+                        ImageValidator.validate_and_process, image_path, self.config.image_size, self.config.pixel_embedding_downsample_factor
                     )
                 )
             for future in futures:
@@ -368,19 +372,29 @@ class DatasetProcessor:
                 .values.astype(np.float32)
             )
         elif metric == "pixel":
-            imgs_per_tid: List[np.ndarray] = []
-            for tid in tqdm(targets, desc="Pixel imgs (all)", leave=False):
-                rows = df[df["TargetID"] == tid]
-                vecs: List[np.ndarray] = []
-                for _, row in rows.iterrows():
-                    p = self._build_image_path(row)
-                    arr = ImageValidator.validate_and_process(p, self.config.image_size)
-                    if arr is not None:
-                        vecs.append(arr.reshape(-1).astype(np.float32))
+            # Efficiently process all images at once, then group by TargetID
+            self.logger.info("Processing all images for pixel embeddings...")
+            all_rows = [row for _, row in df.iterrows()]
+            processed_images = self._process_image_batch(pd.DataFrame(all_rows))
+            
+            # Group processed images by TargetID
+            imgs_by_tid: Dict[Any, List[np.ndarray]] = {tid: [] for tid in targets}
+            for i, row in enumerate(all_rows):
+                tid = row["TargetID"]
+                arr = processed_images[i]
+                if arr is not None:
+                    imgs_by_tid[tid].append(arr.reshape(-1).astype(np.float32))
+
+            # Compute mean embeddings per TargetID
+            embeddings_list: List[np.ndarray] = []
+            for tid in tqdm(targets, desc="Averaging pixel embeddings", leave=False):
+                vecs = imgs_by_tid.get(tid, [])
                 if not vecs:
-                    vecs.append(np.zeros(self.config.image_size ** 2 * 3, np.float32))
-                imgs_per_tid.append(np.mean(vecs, axis=0))
-            embeddings = np.stack(imgs_per_tid, dtype=np.float32)
+                    embedding_size = (self.config.image_size // self.config.pixel_embedding_downsample_factor) ** 2 * 3
+                    vecs.append(np.zeros(embedding_size, np.float32))
+                embeddings_list.append(np.mean(vecs, axis=0))
+            
+            embeddings = np.stack(embeddings_list, dtype=np.float32)
         elif metric == "cnn":
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model = (
@@ -549,6 +563,7 @@ def main() -> None:
     parser.add_argument("--image-size", type=int, help="Image size (overrides config)")
     parser.add_argument("--difficulty-metric", choices=["geo", "pixel", "cnn"], help="Difficulty metric (overrides config)")
     parser.add_argument("--feature-model", help="Feature model (overrides config)")
+    parser.add_argument("--pixel-embedding-downsample-factor", type=int, help="Downsample factor for pixel embeddings (overrides config)")
     args = parser.parse_args()
     # Load config from YAML
     with open(args.config, "r") as f:
@@ -564,6 +579,7 @@ def main() -> None:
     image_size = args.image_size if args.image_size is not None else data_cfg.get("image_size", 224)
     difficulty_metric = args.difficulty_metric or data_cfg.get("difficulty_metric", "geo")
     feature_model = args.feature_model or data_cfg.get("feature_model", "resnet18")
+    pixel_embedding_downsample_factor = args.pixel_embedding_downsample_factor if args.pixel_embedding_downsample_factor is not None else data_cfg.get("pixel_embedding_downsample_factor", 1)
     # Build ProcessingConfig
     config = ProcessingConfig(
         input_dir=input_dir,
@@ -574,6 +590,7 @@ def main() -> None:
         image_size=image_size,
         difficulty_metric=difficulty_metric,
         feature_model=feature_model,
+        pixel_embedding_downsample_factor=pixel_embedding_downsample_factor,
     )
     processor = DatasetProcessor(config)
     processor.process_dataset()

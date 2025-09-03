@@ -7,7 +7,7 @@ from typing import Optional
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-from triplet_dataset import GeoTripletDataset
+from .triplet_dataset import GeoTripletDataset
 
 
 class GeoTripletDataModule(LightningDataModule):

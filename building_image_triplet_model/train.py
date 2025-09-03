@@ -18,8 +18,8 @@ import argparse
 import os
 from pathlib import Path
 
-from datamodule import GeoTripletDataModule
-from model import GeoTripletNet
+from .datamodule import GeoTripletDataModule
+from .model import GeoTripletNet
 import optuna
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import (
