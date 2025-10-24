@@ -28,6 +28,7 @@ from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
 import yaml
+from rich.console import Console
 
 
 @dataclass
@@ -720,6 +721,7 @@ class DatasetProcessor:
 
 
 def main() -> None:
+    console = Console()
     parser = argparse.ArgumentParser(description="Process building typology dataset")
     parser.add_argument("--config", type=Path, default="config.yaml", help="Path to YAML config file")
     parser.add_argument("--input-dir", type=Path, help="Input directory (overrides config)")
@@ -753,18 +755,18 @@ def main() -> None:
         image_size = data_cfg.get("image_size")
         if image_size is None:
             # Infer from backbone
-            feature_model = data_cfg["feature_model"]
+            feature_model = data_cfg.get("feature_model", "resnet18")
             try:
                 dummy_model = timm.create_model(feature_model, pretrained=False)
                 if hasattr(dummy_model, 'default_cfg') and 'input_size' in dummy_model.default_cfg:
                     # default_cfg['input_size'] is (C, H, W), we need H or W
                     image_size = dummy_model.default_cfg['input_size'][1] # Assuming square images
-                    logger.info(f"Inferred image_size={image_size} from backbone {feature_model}")
+                    console.print(f"[green]Inferred image_size={image_size} from backbone {feature_model}[/green]")
                 else:
-                    logger.warning(f"Could not infer image_size from backbone {feature_model}, defaulting to 224.")
+                    console.print(f"[yellow]Could not infer image_size from backbone {feature_model}, defaulting to 224.[/yellow]")
                     image_size = 224
             except Exception as e:
-                logger.warning(f"Error inferring image_size from backbone {feature_model}: {e}, defaulting to 224.")
+                console.print(f"[red]Error inferring image_size from backbone {feature_model}: {e}, defaulting to 224.[/red]")
                 image_size = 224
     difficulty_metric = args.difficulty_metric or data_cfg.get("difficulty_metric", "geo")
     feature_model = args.feature_model or data_cfg.get("feature_model", "resnet18")
