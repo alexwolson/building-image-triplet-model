@@ -2,11 +2,13 @@ import pandas as pd
 import pytest
 from pytorch_lightning import Trainer
 import torch
+import yaml
 
 from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
 from building_image_triplet_model.dataset_processor import (
     DatasetProcessor,
     ProcessingConfig,
+    _update_config_file,
 )
 from building_image_triplet_model.model import GeoTripletNet
 from building_image_triplet_model.triplet_dataset import GeoTripletDataset
@@ -116,3 +118,53 @@ def test_metadata_cache_functionality(tmp_path):
     assert loaded_df is not None
     assert len(loaded_df) == 1
     assert loaded_df.iloc[0]["DatasetID"] == 1
+
+
+def test_update_config_file_removes_deprecated_fields(tmp_path):
+    """Test that _update_config_file removes deprecated CNN-related fields."""
+    # Create a config file with deprecated fields
+    config_path = tmp_path / "config.yaml"
+    config_data = {
+        "data": {
+            "hdf5_path": "old_path.h5",
+            "image_size": 512,
+            "cnn_feature_model": "resnet50",  # Deprecated
+            "cnn_image_size": 256,  # Deprecated
+            "cnn_batch_size": 32,  # Deprecated
+            "batch_size": 16,
+        },
+        "model": {"embedding_size": 128},
+    }
+
+    with open(config_path, "w") as f:
+        yaml.safe_dump(config_data, f)
+
+    # Create a ProcessingConfig to update the file
+    processing_config = ProcessingConfig(
+        input_dir=tmp_path / "input",
+        output_file=tmp_path / "new_output.h5",
+        n_samples=None,
+        batch_size=10,
+        image_size=224,
+        precompute_backbone_embeddings=False,
+    )
+
+    # Update the config file
+    _update_config_file(config_path, processing_config)
+
+    # Read the updated config
+    with open(config_path, "r") as f:
+        updated_config = yaml.safe_load(f)
+
+    # Check that deprecated fields have been removed
+    assert "cnn_feature_model" not in updated_config["data"]
+    assert "cnn_image_size" not in updated_config["data"]
+    assert "cnn_batch_size" not in updated_config["data"]
+
+    # Check that new values are set correctly
+    assert updated_config["data"]["hdf5_path"] == str(tmp_path / "new_output.h5")
+    assert updated_config["data"]["image_size"] == 224
+
+    # Check that other fields are preserved
+    assert updated_config["data"]["batch_size"] == 16
+    assert updated_config["model"]["embedding_size"] == 128

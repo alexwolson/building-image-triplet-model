@@ -705,6 +705,11 @@ def _update_config_file(config_path: Path, config: ProcessingConfig) -> None:
     config_dict["data"]["hdf5_path"] = str(config.output_file)
     config_dict["data"]["image_size"] = config.image_size
 
+    # Remove deprecated CNN-related fields if they exist
+    deprecated_fields = ["cnn_feature_model", "cnn_image_size", "cnn_batch_size"]
+    for field in deprecated_fields:
+        config_dict["data"].pop(field, None)
+
     # If backbone embeddings were precomputed, read the backbone output size from HDF5
     if config.precompute_backbone_embeddings:
         try:
