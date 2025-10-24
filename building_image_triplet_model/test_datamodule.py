@@ -247,40 +247,48 @@ class TestGeoTripletDataModuleTeardown:
     @patch("building_image_triplet_model.datamodule.GeoTripletDataset")
     def test_teardown_fit_stage(self, mock_dataset_class):
         """Test teardown properly closes datasets."""
-        # Create mock datasets with close method
-        mock_train_dataset = MagicMock()
-        mock_val_dataset = MagicMock()
-        mock_dataset_class.side_effect = [mock_train_dataset, mock_val_dataset]
+        # Patch GeoTripletDataset to always return a new MagicMock
+        def dataset_factory(*args, **kwargs):
+            return MagicMock()
+        mock_dataset_class.side_effect = dataset_factory
 
         dm = GeoTripletDataModule(hdf5_path="test.h5")
         dm.setup(stage="fit")
+
+        # Save references to the datasets
+        train_ds = dm.train_dataset
+        val_ds = dm.val_dataset
 
         # Call teardown
         dm.teardown(stage="fit")
 
         # Check that close was called on both datasets
-        mock_train_dataset.close.assert_called_once()
-        mock_val_dataset.close.assert_called_once()
+        train_ds.close.assert_called_once()
+        val_ds.close.assert_called_once()
 
     @patch("building_image_triplet_model.datamodule.GeoTripletDataset")
     def test_teardown_none_stage(self, mock_dataset_class):
         """Test teardown with None stage closes datasets."""
-        # Create mock datasets with close method
-        mock_train_dataset = MagicMock()
-        mock_val_dataset = MagicMock()
-        mock_test_dataset = MagicMock()
-        mock_dataset_class.side_effect = [mock_train_dataset, mock_val_dataset, mock_test_dataset]
+        # Patch GeoTripletDataset to always return a new MagicMock
+        def dataset_factory(*args, **kwargs):
+            return MagicMock()
+        mock_dataset_class.side_effect = dataset_factory
 
         dm = GeoTripletDataModule(hdf5_path="test.h5")
         dm.setup(stage=None)
+
+        # Save references to the datasets
+        train_ds = dm.train_dataset
+        val_ds = dm.val_dataset
+        test_ds = dm.test_dataset
 
         # Call teardown with None
         dm.teardown(stage=None)
 
         # Check that close was called on all datasets
-        mock_train_dataset.close.assert_called_once()
-        mock_val_dataset.close.assert_called_once()
-        mock_test_dataset.close.assert_called_once()
+        train_ds.close.assert_called_once()
+        val_ds.close.assert_called_once()
+        test_ds.close.assert_called_once()
 
     def test_teardown_without_setup(self):
         """Test teardown when setup was never called doesn't crash."""
