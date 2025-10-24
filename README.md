@@ -14,6 +14,8 @@ This project requires **Python 3.12**. All dependencies are managed via `require
 
 All training and data parameters are managed via a YAML config file. Copy `config.example.yaml` to `config.yaml` and update the paths for your environment.
 
+**Important**: Both scripts now require the `--config` argument to be specified explicitly. There are no CLI argument overrides - all configuration must be done through the YAML file.
+
 Example `config.example.yaml`:
 
 ```yaml
@@ -41,6 +43,9 @@ data:
   feature_model: vit_pe_spatial_base_patch16_512.fb
   image_size: 512
   difficulty_metric: geo
+  precompute_backbone_embeddings: false  # Set to true to precompute backbone embeddings
+  use_precomputed_embeddings: false  # Set to true to use precomputed embeddings from HDF5
+  store_raw_images: true  # Whether to store raw images in the HDF5 file
 
 logging:
   project_name: "geo-triplet-net"
@@ -54,6 +59,8 @@ model:
   freeze_backbone: false
   margin: 1.0
   pretrained: true
+  # Backbone output size for precomputed embeddings (auto-determined if not set)
+  backbone_output_size: null
 
 train:
   difficulty_update_freq: 100
@@ -64,13 +71,20 @@ train:
   seed: 42
   warmup_epochs: 3
   weight_decay: 0.0001
+
+optuna:
+  enabled: false  # Set to true to enable Optuna hyperparameter optimization
+  storage: "sqlite:///optuna_studies/building_triplet.db"  # Optuna storage URL
+  study_name: "building_triplet_study"  # Optuna study name
+  project_name: "geo-triplet-optuna"  # W&B project name for Optuna trials
+  group_name: null  # Optional W&B group name
 ```
 
 - Set `auto_batch_size.enabled: true` to automatically find the best batch size before training.
 
 ### Precomputed Embeddings Configuration
 
-When using precomputed embeddings (`--use-precomputed-embeddings`), the model needs to know the backbone output size to properly configure the projection head. The system handles this in two ways:
+When using precomputed embeddings (`data.use_precomputed_embeddings: true`), the model needs to know the backbone output size to properly configure the projection head. The system handles this in two ways:
 
 1. **Explicit Configuration**: Set `model.backbone_output_size` in your config file (recommended for performance)
    ```yaml
@@ -94,27 +108,22 @@ For common backbones:
 python -m building_image_triplet_model.train --config config.yaml
 ```
 
-### Training with Precomputed Embeddings
-
-```bash
-python -m building_image_triplet_model.train --config config.yaml --use-precomputed-embeddings
-```
-
 ### Optuna Hyperparameter Optimization
 
-```bash
-python -m building_image_triplet_model.train --config config.yaml --optuna --storage sqlite:///optuna_study.db --study-name my_study
+To enable Optuna hyperparameter optimization, set `optuna.enabled: true` in your config file:
+
+```yaml
+optuna:
+  enabled: true
+  storage: "sqlite:///optuna_studies/building_triplet.db"
+  study_name: "building_triplet_study"
+  project_name: "geo-triplet-optuna"
 ```
 
-### Additional CLI Options
-
-The training script supports several additional options:
-
-- `--use-precomputed-embeddings`: Use precomputed embeddings from HDF5 file instead of raw images
-- `--store-raw-images`: Control whether to store raw images in the HDF5 file (for dataset processing)
-- `--freeze-backbone`: Freeze backbone weights during training
-- `--precision`: Set training precision (`32` or `16-mixed`)
-- `--offline`: Disable W&B online sync
+Then run:
+```bash
+python -m building_image_triplet_model.train --config config.yaml
+```
 
 ### Dataset Processing
 
@@ -145,11 +154,13 @@ This will check:
 
 ## SLURM Usage
 
-The SLURM scripts in `slurm/` are updated to use the new CLI and YAML config. Example:
+The SLURM scripts in `slurm/` are updated to use the new YAML config. Example:
 
 ```bash
-srun python -m building_image_triplet_model.train --config config.yaml --optuna --storage sqlite:///optuna_study.db --study-name my_study
+srun python -m building_image_triplet_model.train --config config.yaml
 ```
+
+For Optuna optimization, set `optuna.enabled: true` in your config file instead of using CLI arguments.
 
 ## Project Organization
 
