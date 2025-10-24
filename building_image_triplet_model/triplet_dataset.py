@@ -86,7 +86,9 @@ class GeoTripletDataset(Dataset):
         else:
             raise ValueError("Either use_precomputed_embeddings or store_raw_images must be True.")
         # Load split-specific matrices and metadata
-        assert self.h5_file is not None, "HDF5 file must be open."
+        if self.h5_file is None:
+            raise RuntimeError("HDF5 file must be open before loading metadata.")
+        
         try:
             target_order_key = f"target_id_order_{split}"
             self.target_id_order = np.array(self.h5_file["metadata"][target_order_key][:])
@@ -108,7 +110,6 @@ class GeoTripletDataset(Dataset):
             f"Loaded KNN distance tables '{knn_idx_key}/{knn_dist_key}' for split='{split}'."
         )
         self.tid_to_row = {tid: i for i, tid in enumerate(self.target_id_order)}
-        assert self.h5_file is not None, "HDF5 file must be open."
         split_targets = set(np.array(self.h5_file["splits"][split][:]))
         all_valid_indices = np.array(self.h5_file["images"]["valid_indices"][:])
         all_target_ids = np.array(self.h5_file["metadata"]["TargetID"][:])
@@ -124,15 +125,13 @@ class GeoTripletDataset(Dataset):
         )
 
     def _open_h5(self) -> None:
-        """Open the HDF5 file, with error handling (robust to truth-value check)."""
+        """Open the HDF5 file, with error handling."""
         try:
-            # Using bool() on an h5py.File raises ValueError, so rely on its id.valid flag.
-            if (
-                self.h5_file is None
-                or not hasattr(self.h5_file, "id")
-                or not self.h5_file.id.valid
-            ):
+            if self.h5_file is None or not self.h5_file.id.valid:
                 self.h5_file = h5py.File(self.hdf5_path, "r")
+        except (AttributeError, ValueError) as e:
+            # Handle case where h5_file doesn't have id attribute or is invalid
+            self.h5_file = h5py.File(self.hdf5_path, "r")
         except Exception as e:
             logger.error(f"Failed to open HDF5 file: {e}")
             raise
@@ -256,7 +255,8 @@ class GeoTripletDataset(Dataset):
         global_idx = self.valid_indices[local_idx]
         if global_idx in self.cache:
             return self.cache[global_idx]
-        assert self.h5_file is not None, "HDF5 file must be open."
+        if self.h5_file is None:
+            raise RuntimeError("HDF5 file must be open to access data.")
         try:
             data = self.embeddings_dataset[global_idx]  # type: ignore
             data = np.array(data)
@@ -341,7 +341,9 @@ class GeoTripletDataset(Dataset):
                 logger.warning(f"Exception while closing HDF5 file: {e}")
 
     def __del__(self):
+        """Cleanup when the dataset is destroyed."""
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Ignore errors during cleanup to avoid issues during interpreter shutdown
+            logger.debug(f"Error during dataset cleanup: {e}")

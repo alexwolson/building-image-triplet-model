@@ -176,7 +176,6 @@ def main():
         optuna_config = config.get("optuna", {})
         if not optuna_config.get("storage") or not optuna_config.get("study_name"):
             raise ValueError("Optuna mode requires storage and study_name in config")
-        import optuna
 
         console.print(f"[green]Connecting to Optuna storage:[/green] {optuna_config['storage']}")
         study = optuna.create_study(

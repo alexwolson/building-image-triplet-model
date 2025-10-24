@@ -44,12 +44,11 @@ def test_dummy_training_step():
 
 
 def test_dataset_loading(tmp_path):
+    """Test that GeoTripletDataset fails gracefully without a valid HDF5 file."""
     # This is a placeholder: in real tests, use a small HDF5 file or mock
-    # For now, just check that the class can be instantiated
-    try:
+    # For now, just check that the class raises an exception without a real file
+    with pytest.raises(Exception):
         ds = GeoTripletDataset(hdf5_path="dummy.h5", split="train")
-    except Exception:
-        pass  # Expected to fail without a real file
 
 
 def test_metadata_cache_functionality(tmp_path):

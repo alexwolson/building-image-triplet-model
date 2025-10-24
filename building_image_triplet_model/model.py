@@ -94,13 +94,8 @@ class GeoTripletNet(LightningModule):
         return embeddings
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        """Returns the embedding for a batch of images (forward-only, no loss)."""
-        if self.use_precomputed_embeddings:
-            features = x
-        else:
-            features = self.backbone(x)
-        embeddings = self.embedding(features)
-        return embeddings
+        """Returns the embedding for a batch of images (alias for forward)."""
+        return self.forward(x)
 
     def training_step(
         self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
 import argparse
-from concurrent.futures import Executor as BaseExecutor
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 import gc
-from itertools import islice
+from itertools import batched
 import logging
 from pathlib import Path
 import sys
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import warnings
 import pickle
 
@@ -86,22 +85,10 @@ class ImageValidator:
                         top = (h - side) // 2
                         img = img.crop((left, top, left + side, top + side))
                     img = img.resize((image_size, image_size), Image.Resampling.LANCZOS)
-                    img_array = np.array(img, dtype=np.uint8)
-                    img.close()
-                    del img
-                    return img_array
+                    return np.array(img, dtype=np.uint8)
         except Exception as e:
             logger.error(f"Error processing {image_path}: {str(e)}")
             return None
-        finally:
-            gc.collect()
-
-
-def batched(iterable: Any, batch_size: int) -> Iterator:
-    """Yield batches from an iterable."""
-    iterator = iter(iterable)
-    while batch := list(islice(iterator, batch_size)):
-        yield batch
 
 
 class DatasetProcessor:
@@ -303,7 +290,7 @@ class DatasetProcessor:
     def _build_image_path(self, row: pd.Series) -> Path:
         """Construct absolute image path from metadata row."""
         if "Subpath" in row and isinstance(row["Subpath"], str):
-            return self.config.input_dir / Path(row["Subpath"]) / row["Image filename"]
+            return self.config.input_dir / row["Subpath"] / row["Image filename"]
         # Fallback for legacy CSV-based structure (not used anymore but kept for safety)
         return self.config.input_dir / str(row["Subdirectory"]).zfill(4) / row["Image filename"]
 
@@ -322,8 +309,7 @@ class DatasetProcessor:
     def _process_image_batch(self, batch_rows: pd.DataFrame) -> List[Optional[np.ndarray]]:
         """Process a batch of images in parallel."""
         results: List[Optional[np.ndarray]] = []
-        ExecCls: type[BaseExecutor] = ProcessPoolExecutor
-        with ExecCls(max_workers=self.config.num_workers) as executor:
+        with ProcessPoolExecutor(max_workers=self.config.num_workers) as executor:
             futures = []
             for _, row in batch_rows.iterrows():
                 image_path = self._build_image_path(row)
