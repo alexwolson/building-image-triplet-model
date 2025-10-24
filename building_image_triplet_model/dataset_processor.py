@@ -223,11 +223,8 @@ class DatasetProcessor:
                     lines = [ln.strip() for ln in f.readlines() if ln.strip()]
                 if not lines:
                     return None
-                d_line = None
-                for ln in lines:
-                    if ln.startswith("d"):
-                        d_line = ln
-                        break
+                # Find the 'd' line using next() with default
+                d_line = next((ln for ln in lines if ln.startswith("d")), None)
                 if d_line is None:
                     return None
                 # Tokenize and drop the leading 'd'
@@ -244,12 +241,14 @@ class DatasetProcessor:
                 subpath = txt_path.parent.relative_to(self.config.input_dir).as_posix()
                 # Determine image filename by probing common extensions
                 stem = txt_path.stem
-                image_filename: Optional[str] = None
-                for ext in (".jpg", ".jpeg"):
-                    candidate = txt_path.with_suffix(ext)
-                    if candidate.exists():
-                        image_filename = candidate.name
-                        break
+                image_filename = next(
+                    (
+                        (candidate := txt_path.with_suffix(ext)).name
+                        for ext in (".jpg", ".jpeg")
+                        if candidate.exists()
+                    ),
+                    None,
+                )
                 if image_filename is None:
                     # No paired image; skip
                     return None

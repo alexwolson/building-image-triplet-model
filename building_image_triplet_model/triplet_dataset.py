@@ -157,7 +157,6 @@ class GeoTripletDataset(Dataset):
         # Flatten KNN distances to approximate global distribution (ignore inf)
         all_dists = self.knn_distances[:].astype(np.float32).flatten()
         sample_values = all_dists[np.isfinite(all_dists)]
-        n = len(self.target_id_order)
         bounds = np.quantile(sample_values, np.linspace(0.0, 1.0, num_levels + 1)).astype(
             np.float32
         )
@@ -168,26 +167,23 @@ class GeoTripletDataset(Dataset):
                 success_rate=0.5,
                 num_attempts=0,
             )
-            for lo, hi in zip(bounds[:-1], bounds[1:])
+            for lo, hi in zip(bounds[:-1], bounds[1:], strict=True)
         ]
         logger.info(
             "Difficulty bands (quantiles): "
-            + ", ".join(f"[{lo:.4f}, {hi:.4f}]" for lo, hi in zip(bounds[:-1], bounds[1:]))
+            + ", ".join(f"[{lo:.4f}, {hi:.4f}]" for lo, hi in zip(bounds[:-1], bounds[1:], strict=True))
         )
         return levels
 
     def _select_difficulty_level(self) -> TripletDifficulty:
         """Select a difficulty level using UCB balancing exploration and exploitation."""
         total_attempts = sum(max(1, lvl.num_attempts) for lvl in self.difficulty_levels)
-        scores = []
-        for lvl in self.difficulty_levels:
-            exploitation = 1.0 - lvl.success_rate
-            exploration = math.sqrt(
-                self.ucb_alpha * math.log(total_attempts) / max(1, lvl.num_attempts)
-            )
-            scores.append(exploitation + exploration)
-        idx = int(np.argmax(scores))
-        return self.difficulty_levels[idx]
+        scores = [
+            (1.0 - lvl.success_rate)
+            + math.sqrt(self.ucb_alpha * math.log(total_attempts) / max(1, lvl.num_attempts))
+            for lvl in self.difficulty_levels
+        ]
+        return self.difficulty_levels[np.argmax(scores)]
 
     def _get_distance_row(self, anchor_row: int) -> np.ndarray:
         """Return a synthetic full-distance row using KNN distances; non-stored entries are +inf."""
