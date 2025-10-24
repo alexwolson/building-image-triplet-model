@@ -76,7 +76,6 @@ class GeoTripletDataset(Dataset):
             )
         self.embeddings_dataset = self.h5_file["backbone_embeddings"]
         logger.info("Using precomputed backbone embeddings.")
-        
         # Load split-specific matrices and metadata
         if self.h5_file is None:
             raise RuntimeError("HDF5 file must be open before loading metadata.")
