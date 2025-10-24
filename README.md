@@ -71,9 +71,6 @@ data:
   # Model configuration
   feature_model: vit_pe_spatial_base_patch16_512.fb
   image_size: 512
-  precompute_backbone_embeddings: false  # Set to true to precompute backbone embeddings
-  use_precomputed_embeddings: false  # Set to true to use precomputed embeddings from HDF5
-  store_raw_images: true  # Whether to store raw images in the HDF5 file
 
 logging:
   project_name: "geo-triplet-net"
@@ -110,9 +107,16 @@ optuna:
 
 - Set `auto_batch_size.enabled: true` to automatically find the best batch size before training.
 
-### Precomputed Embeddings Configuration
+### Backbone Embeddings
 
-When using precomputed embeddings (`data.use_precomputed_embeddings: true`), the model needs to know the backbone output size to properly configure the projection head. The system handles this in two ways:
+**Important**: This project now requires precomputed backbone embeddings. Raw images are not stored in the HDF5 file - instead, backbone features are computed during dataset processing and stored for efficient training.
+
+The dataset processor automatically precomputes backbone embeddings when you run:
+```bash
+uv run python -m building_image_triplet_model.dataset_processor --config config.yaml
+```
+
+The model needs to know the backbone output size to properly configure the projection head. The system handles this in two ways:
 
 1. **Explicit Configuration**: Set `model.backbone_output_size` in your config file (recommended for performance)
    ```yaml
@@ -163,9 +167,10 @@ uv run python -m building_image_triplet_model.dataset_processor --config config.
 
 This will:
 - Parse metadata from `.txt` files in the input directory
-- Process and resize images
+- Process and validate images
+- Precompute backbone embeddings for all images
 - Compute geographical coordinate embeddings and distance matrices
-- Save everything to an HDF5 file for efficient training
+- Save precomputed embeddings and metadata to an HDF5 file for efficient training
 
 ### Running Tests
 
