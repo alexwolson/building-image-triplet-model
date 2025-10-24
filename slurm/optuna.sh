@@ -13,7 +13,7 @@
 ###############################################################################
 # 1. Load modules
 ###############################################################################
-module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.10.13
+module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 ###############################################################################
 # 2. Scratch workspace
@@ -32,15 +32,23 @@ fi
 echo "Dataset copied to ${DATASET_LOCAL}"
 
 ###############################################################################
-# 3. Python environment
+# 3. Python environment with uv
 ###############################################################################
-VENV_DIR=$SLURM_TMPDIR/env
-python -m venv "${VENV_DIR}"
-source "${VENV_DIR}/bin/activate"
-"${VENV_DIR}/bin/python" -m pip install --no-index --upgrade pip
-"${VENV_DIR}/bin/python" -m pip install --no-index -r /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/requirements.txt
-# Install the project itself so that its modules can be imported
-"${VENV_DIR}/bin/python" -m pip install --no-index -e /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model
+# Install uv if not available
+if ! command -v uv &> /dev/null; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    source $HOME/.cargo/env
+fi
+
+# Copy project to scratch and set up with uv
+PROJECT_DIR=$SLURM_TMPDIR/building-image-triplet-model
+cp -r /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model "${PROJECT_DIR}"
+cd "${PROJECT_DIR}"
+
+# Create virtual environment and install dependencies
+uv venv
+source .venv/bin/activate
+uv sync
 
 # Optional: Weights & Biases
 wandb login f50b84f86887e45deb950e681475f7fa0f25e1bf
@@ -99,4 +107,4 @@ optuna:
   group_name: null
 EOF
 
-srun python -m building_image_triplet_model.train --config "${TEMP_CONFIG}"
+srun uv run python -m building_image_triplet_model.train --config "${TEMP_CONFIG}"

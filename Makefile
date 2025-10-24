@@ -3,7 +3,7 @@
 #################################################################################
 
 PROJECT_NAME = building-image-triplet-model
-PYTHON_VERSION = 3.10.13
+PYTHON_VERSION = 3.12
 PYTHON_INTERPRETER = python
 
 #################################################################################
@@ -14,7 +14,7 @@ PYTHON_INTERPRETER = python
 ## Install Python dependencies
 .PHONY: requirements
 requirements:
-	conda env update --name $(PROJECT_NAME) --file environment.yml --prune
+	uv sync
 	
 
 
@@ -29,15 +29,15 @@ clean:
 ## Lint using flake8, black, and isort (use `make format` to do formatting)
 .PHONY: lint
 lint:
-	flake8 building_image_triplet_model
-	isort --check --diff building_image_triplet_model
-	black --check building_image_triplet_model
+	uv run flake8 building_image_triplet_model
+	uv run isort --check --diff building_image_triplet_model
+	uv run black --check building_image_triplet_model
 
 ## Format source code with black
 .PHONY: format
 format:
-	isort building_image_triplet_model
-	black building_image_triplet_model
+	uv run isort building_image_triplet_model
+	uv run black building_image_triplet_model
 
 
 
@@ -46,9 +46,10 @@ format:
 ## Set up Python interpreter environment
 .PHONY: create_environment
 create_environment:
-	conda env create --name $(PROJECT_NAME) -f environment.yml
+	uv venv
+	uv sync
 	
-	@echo ">>> conda env created. Activate with:\nconda activate $(PROJECT_NAME)"
+	@echo ">>> uv environment created. Activate with:\nsource .venv/bin/activate"
 	
 
 
