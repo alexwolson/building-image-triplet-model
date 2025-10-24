@@ -48,8 +48,6 @@ def load_config(config_path: str | Path) -> dict:
 def create_model_and_datamodule(
     config: dict,
     overrides: Optional[dict] = None,
-    use_precomputed_embeddings: bool = False,
-    store_raw_images: bool = True,
 ):
     """Create model and datamodule, optionally overriding config values (e.g., for Optuna)."""
     overrides = overrides or {}
@@ -84,8 +82,6 @@ def create_model_and_datamodule(
         num_difficulty_levels=num_difficulty_levels,
         ucb_alpha=ucb_alpha,
         cache_size=cache_size,
-        use_precomputed_embeddings=use_precomputed_embeddings,
-        store_raw_images=store_raw_images,
     )
     model = GeoTripletNet(
         embedding_size=embedding_size,
@@ -97,7 +93,6 @@ def create_model_and_datamodule(
         pretrained=pretrained,
         difficulty_update_freq=difficulty_update_freq,
         freeze_backbone=freeze_backbone,
-        use_precomputed_embeddings=use_precomputed_embeddings,
         backbone_output_size=backbone_output_size,
     )
     return model, data_module
@@ -223,14 +218,8 @@ def main():
             EarlyStopping(monitor="val_loss", patience=10, mode="min"),
             LearningRateMonitor(logging_interval="step"),
         ]
-        # Read all settings from config
-        use_precomputed_embeddings = config["data"].get("use_precomputed_embeddings", False)
-        store_raw_images = config["data"].get("store_raw_images", True)
-        model, data_module = create_model_and_datamodule(
-            config,
-            use_precomputed_embeddings=use_precomputed_embeddings,
-            store_raw_images=store_raw_images,
-        )
+        # Create model and datamodule
+        model, data_module = create_model_and_datamodule(config)
         trainer = Trainer(
             max_epochs=config["train"]["max_epochs"],
             limit_train_batches=steps_per_epoch,

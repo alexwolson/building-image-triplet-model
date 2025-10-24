@@ -7,7 +7,6 @@ from itertools import batched
 from typing import List, Optional
 
 import h5py
-from h5py import Dataset
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -25,26 +24,11 @@ class HDF5Writer:
         self.logger = logging.getLogger(__name__)
 
     def initialize_hdf5(self, n_images: int, metadata_df: pd.DataFrame):
-        """Initialize HDF5 file with proper chunking and compression for images & metadata."""
+        """Initialize HDF5 file with proper chunking and compression for metadata."""
         f = h5py.File(self.config.output_file, "w")
-        images_group = f.create_group("images")
+        f.create_group("images")
         f.create_group("metadata")
         f.create_group("splits")
-        if self.config.store_raw_images:
-            # Pre-allocate the full image dataset to avoid costly resizes on large corpora
-            images_group.create_dataset(
-                "data",
-                shape=(n_images, self.config.image_size, self.config.image_size, 3),
-                dtype=np.uint8,
-                chunks=self.config.chunk_size,
-                compression="lzf",
-            )
-            images_group.create_dataset(
-                "valid_mask",
-                shape=(n_images,),
-                dtype=np.bool_,
-                compression="lzf",
-            )
         return f
 
     def process_image_batch(self, batch_rows: pd.DataFrame) -> List[Optional[np.ndarray]]:
@@ -100,13 +84,9 @@ class HDF5Writer:
     def process_and_store_images(
         self, h5_file, metadata_df: pd.DataFrame
     ) -> List[int]:
-        """Process and store images in batches, returning valid indices."""
+        """Process images to get valid indices (without storing raw images)."""
         current_idx = 0  # Global row counter in metadata_df order
         valid_indices: List[int] = []
-        
-        if self.config.store_raw_images:
-            images_data = h5_file["images/data"]
-            valid_mask_ds = h5_file["images/valid_mask"]
         
         for batch_idx, batch in enumerate(
             tqdm(
@@ -121,17 +101,12 @@ class HDF5Writer:
             for i, img in enumerate(processed_images):
                 global_idx = current_idx + i
                 if img is not None:
-                    if self.config.store_raw_images:
-                        if isinstance(images_data, Dataset):
-                            images_data[global_idx] = img  # type: ignore[index]
-                        if isinstance(valid_mask_ds, Dataset):
-                            valid_mask_ds[global_idx] = True  # type: ignore[index]
                     valid_indices.append(global_idx)
             current_idx += len(processed_images)
             del processed_images
             gc.collect()
         
-        # Store valid_indices as a compact dataset for backward compatibility
+        # Store valid_indices as a compact dataset
         images_group = h5_file["images"]  # type: ignore[assignment]
         images_group.create_dataset(  # type: ignore[attr-defined]
             "valid_indices",

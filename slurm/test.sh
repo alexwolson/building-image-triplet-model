@@ -64,8 +64,6 @@ data:
   num_workers: ${SLURM_CPUS_PER_TASK}
   hdf5_path: "${DATASET_LOCAL}"
   cache_size: 1000
-  use_precomputed_embeddings: false
-  store_raw_images: true
 logging:
   project_name: "geo-triplet-test"
   exp_name: "test_run"

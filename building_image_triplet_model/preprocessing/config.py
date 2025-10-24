@@ -24,8 +24,6 @@ class ProcessingConfig:
     feature_model: str = "resnet18"  # used for backbone / training
     chunk_size: Tuple[int, int, int, int] = (1, 224, 224, 3)
     knn_k: int = 512  # number of nearest neighbours to store per target
-    precompute_backbone_embeddings: bool = False  # whether to precompute backbone embeddings
-    store_raw_images: bool = True  # whether to store raw images in the HDF5 file
 
     def __post_init__(self) -> None:
         if self.val_size + self.test_size >= 1.0:
@@ -78,8 +76,6 @@ def load_processing_config(config_path: Path) -> ProcessingConfig:
     batch_size = data_cfg.get("batch_size", 100)
     num_workers = data_cfg.get("num_workers", 4)
     feature_model = data_cfg.get("feature_model", "resnet18")
-    store_raw_images = data_cfg.get("store_raw_images", True)
-    precompute_backbone_embeddings = data_cfg.get("precompute_backbone_embeddings", False)
 
     # Handle image sizes with proper inference
     image_size = data_cfg.get("image_size")
@@ -95,8 +91,6 @@ def load_processing_config(config_path: Path) -> ProcessingConfig:
         num_workers=num_workers,
         image_size=image_size,
         feature_model=feature_model,
-        store_raw_images=store_raw_images,
-        precompute_backbone_embeddings=precompute_backbone_embeddings,
     )
 
 
@@ -117,21 +111,20 @@ def update_config_file(config_path: Path, config: ProcessingConfig) -> None:
     for field in deprecated_fields:
         config_dict["data"].pop(field, None)
 
-    # If backbone embeddings were precomputed, read the backbone output size from HDF5
-    if config.precompute_backbone_embeddings:
-        try:
-            import h5py
-            with h5py.File(config.output_file, "r") as f:
-                if "backbone_output_size" in f.attrs:
-                    backbone_output_size = int(f.attrs["backbone_output_size"])
-                    config_dict.setdefault("model", {})[
-                        "backbone_output_size"
-                    ] = backbone_output_size
-                    console.print(
-                        f"[green]Updated config with backbone_output_size: {backbone_output_size}[/green]"
-                    )
-        except Exception as e:
-            console.print(f"[yellow]Could not read backbone_output_size from HDF5: {e}[/yellow]")
+    # Read the backbone output size from HDF5
+    try:
+        import h5py
+        with h5py.File(config.output_file, "r") as f:
+            if "backbone_output_size" in f.attrs:
+                backbone_output_size = int(f.attrs["backbone_output_size"])
+                config_dict.setdefault("model", {})[
+                    "backbone_output_size"
+                ] = backbone_output_size
+                console.print(
+                    f"[green]Updated config with backbone_output_size: {backbone_output_size}[/green]"
+                )
+    except Exception as e:
+        console.print(f"[yellow]Could not read backbone_output_size from HDF5: {e}[/yellow]")
 
     # Write updated config back to file
     with open(config_path, "w") as f:

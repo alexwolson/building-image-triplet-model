@@ -5,24 +5,23 @@ import torch
 import yaml
 
 from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
-from building_image_triplet_model.dataset_processor import (
-    DatasetProcessor,
+from building_image_triplet_model.preprocessing import (
     ProcessingConfig,
-    _update_config_file,
+    update_config_file as _update_config_file,
 )
+from building_image_triplet_model.preprocessing.processor import DatasetProcessor
 from building_image_triplet_model.model import GeoTripletNet
 from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 
 
 class DummyDataset(torch.utils.data.Dataset):
-    def __init__(self, n=10, c=3, h=224, w=224):
+    def __init__(self, n=10, embedding_dim=768):
         self.n = n
-        self.c = c
-        self.h = h
-        self.w = w
+        self.embedding_dim = embedding_dim
 
     def __getitem__(self, idx):
-        x = torch.rand(self.c, self.h, self.w)
+        # Return precomputed embeddings instead of images
+        x = torch.rand(self.embedding_dim)
         return x, x, x
 
     def __len__(self):
@@ -30,14 +29,15 @@ class DummyDataset(torch.utils.data.Dataset):
 
 
 def test_model_forward():
-    model = GeoTripletNet()
-    x = torch.rand(2, 3, 224, 224)
+    # Model now expects precomputed embeddings as input, not raw images
+    model = GeoTripletNet(backbone_output_size=768)
+    x = torch.rand(2, 768)  # Simulating precomputed backbone features
     out = model(x)
     assert out.shape[0] == 2
 
 
 def test_dummy_training_step():
-    model = GeoTripletNet()
+    model = GeoTripletNet(backbone_output_size=768)
     dataset = DummyDataset()
     loader = torch.utils.data.DataLoader(dataset, batch_size=2)
     trainer = Trainer(
@@ -56,6 +56,8 @@ def test_dataset_loading(tmp_path):
 
 def test_metadata_cache_functionality(tmp_path):
     """Test that the metadata caching mechanism works correctly."""
+    from building_image_triplet_model.preprocessing.metadata import MetadataManager
+
     # Create a temporary directory with some mock .txt files
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -84,14 +86,14 @@ def test_metadata_cache_functionality(tmp_path):
         image_size=224,
     )
 
-    # Create processor
-    processor = DatasetProcessor(config)
+    # Create metadata manager
+    metadata_manager = MetadataManager(config)
 
     # Test cache path generation
-    cache_path = processor._get_cache_path()
+    cache_path = metadata_manager._get_cache_path()
     assert cache_path.name == "metadata_cache_complete.pkl"
 
-    temp_cache_path = processor._get_temp_cache_path()
+    temp_cache_path = metadata_manager._get_temp_cache_path()
     assert temp_cache_path.name == "metadata_cache_building.pkl"
 
     # Test cache save/load with mock data
@@ -109,12 +111,12 @@ def test_metadata_cache_functionality(tmp_path):
     )
 
     # Save cache
-    processor._save_metadata_cache(mock_df)
+    metadata_manager._save_metadata_cache(mock_df)
     assert cache_path.exists()
     assert not temp_cache_path.exists()  # Should be moved to final location
 
     # Load cache
-    loaded_df = processor._load_metadata_cache()
+    loaded_df = metadata_manager._load_metadata_cache()
     assert loaded_df is not None
     assert len(loaded_df) == 1
     assert loaded_df.iloc[0]["DatasetID"] == 1
@@ -146,7 +148,6 @@ def test_update_config_file_removes_deprecated_fields(tmp_path):
         n_samples=None,
         batch_size=10,
         image_size=224,
-        precompute_backbone_embeddings=False,
     )
 
     # Update the config file

@@ -6,7 +6,6 @@ from typing import Optional
 
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
 
 from .triplet_dataset import GeoTripletDataset
 
@@ -24,8 +23,6 @@ class GeoTripletDataModule(LightningDataModule):
         num_difficulty_levels: int = 10,
         ucb_alpha: float = 2.0,
         cache_size: int = 1000,
-        use_precomputed_embeddings: bool = False,
-        store_raw_images: bool = True,
     ):
         super().__init__()
         self.hdf5_path: str = hdf5_path
@@ -34,27 +31,12 @@ class GeoTripletDataModule(LightningDataModule):
         self.num_difficulty_levels: int = num_difficulty_levels
         self.cache_size: int = cache_size
         self.ucb_alpha: float = ucb_alpha
-        self.use_precomputed_embeddings: bool = use_precomputed_embeddings
-        self.store_raw_images: bool = store_raw_images
         self.train_dataset = None  # type: Optional[GeoTripletDataset]
         self.val_dataset = None  # type: Optional[GeoTripletDataset]
 
-        # Define transforms
-        self.train_transform = transforms.Compose(
-            [
-                transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
-                transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-                transforms.RandomAffine(degrees=10, translate=(0.1, 0.1)),
-                transforms.ToTensor(),
-            ]
-        )
-        self.val_transform = transforms.Compose(
-            [
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-            ]
-        )
+        # Transforms are not used with precomputed embeddings, but kept for compatibility
+        self.train_transform = None
+        self.val_transform = None
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Set up datasets for training and validation."""
@@ -66,8 +48,6 @@ class GeoTripletDataModule(LightningDataModule):
                 cache_size=self.cache_size,
                 transform=self.train_transform,
                 ucb_alpha=self.ucb_alpha,
-                use_precomputed_embeddings=self.use_precomputed_embeddings,
-                store_raw_images=self.store_raw_images,
             )
             self.val_dataset = GeoTripletDataset(
                 hdf5_path=self.hdf5_path,
@@ -76,8 +56,6 @@ class GeoTripletDataModule(LightningDataModule):
                 cache_size=self.cache_size,
                 transform=self.val_transform,
                 ucb_alpha=self.ucb_alpha,
-                use_precomputed_embeddings=self.use_precomputed_embeddings,
-                store_raw_images=self.store_raw_images,
             )
 
     def train_dataloader(self) -> DataLoader:
