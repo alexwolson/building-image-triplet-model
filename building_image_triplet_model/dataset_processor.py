@@ -697,12 +697,13 @@ class DatasetProcessor:
                 processed_images = self._process_image_batch(batch_df)
                 for i, img in enumerate(processed_images):
                     global_idx = current_idx + i
-                    if self.config.store_raw_images:
-                        if img is not None and isinstance(images_data, Dataset):
-                            images_data[global_idx] = img  # type: ignore[index]
+                    if img is not None:
+                        if self.config.store_raw_images:
+                            if isinstance(images_data, Dataset):
+                                images_data[global_idx] = img  # type: ignore[index]
                             if isinstance(valid_mask_ds, Dataset):
                                 valid_mask_ds[global_idx] = True  # type: ignore[index]
-                    valid_indices.append(global_idx)
+                        valid_indices.append(global_idx)
                 current_idx += len(processed_images)
                 del processed_images
                 gc.collect()
