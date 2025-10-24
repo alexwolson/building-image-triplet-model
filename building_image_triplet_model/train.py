@@ -64,8 +64,6 @@ def create_model_and_datamodule(
     embedding_size = overrides.get("embedding_size", config["model"].get("embedding_size", 128))
     margin = overrides.get("margin", config["model"].get("margin", 1.0))
     backbone = config["model"].get("backbone", "tf_efficientnetv2_s.in21k_ft_in1k")
-    pretrained = config["model"].get("pretrained", True)
-    freeze_backbone = config["model"].get("freeze_backbone", False)
     backbone_output_size = config["model"].get("backbone_output_size", None)
     # Training
     lr = overrides.get("lr", config["train"].get("lr", 1e-4))
@@ -90,9 +88,7 @@ def create_model_and_datamodule(
         weight_decay=weight_decay,
         warmup_epochs=warmup_epochs,
         backbone=backbone,
-        pretrained=pretrained,
         difficulty_update_freq=difficulty_update_freq,
-        freeze_backbone=freeze_backbone,
         backbone_output_size=backbone_output_size,
     )
     return model, data_module
