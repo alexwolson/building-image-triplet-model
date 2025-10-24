@@ -18,6 +18,7 @@ is --config to specify the config file location.
 import argparse
 import os
 from pathlib import Path
+from typing import Optional
 
 from .datamodule import GeoTripletDataModule
 from .model import GeoTripletNet
@@ -43,7 +44,7 @@ def load_config(config_path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
-def create_model_and_datamodule(config: dict, overrides: dict = None, use_precomputed_embeddings: bool = False, store_raw_images: bool = True):
+def create_model_and_datamodule(config: dict, overrides: Optional[dict] = None, use_precomputed_embeddings: bool = False, store_raw_images: bool = True):
     """Create model and datamodule, optionally overriding config values (e.g., for Optuna)."""
     overrides = overrides or {}
     # Data
