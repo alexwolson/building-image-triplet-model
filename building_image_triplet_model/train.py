@@ -236,7 +236,10 @@ def main():
             EarlyStopping(monitor="val_loss", patience=10, mode="min"),
             LearningRateMonitor(logging_interval="step"),
         ]
-        model, data_module = create_model_and_datamodule(config, use_precomputed_embeddings=args.use_precomputed_embeddings, store_raw_images=args.store_raw_images)
+        # Use CLI flags only when explicitly provided, otherwise use config defaults
+        use_precomputed_embeddings = args.use_precomputed_embeddings or config["data"].get("use_precomputed_embeddings", False)
+        store_raw_images = args.store_raw_images or config["data"].get("store_raw_images", True)
+        model, data_module = create_model_and_datamodule(config, use_precomputed_embeddings=use_precomputed_embeddings, store_raw_images=store_raw_images)
         trainer = Trainer(
             max_epochs=args.max_epochs,
             limit_train_batches=steps_per_epoch,
