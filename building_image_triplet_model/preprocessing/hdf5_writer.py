@@ -6,6 +6,8 @@ from concurrent.futures import ProcessPoolExecutor
 from itertools import batched
 from typing import List, Optional
 
+import h5py
+from h5py import Dataset
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -24,7 +26,6 @@ class HDF5Writer:
 
     def initialize_hdf5(self, n_images: int, metadata_df: pd.DataFrame):
         """Initialize HDF5 file with proper chunking and compression for images & metadata."""
-        import h5py
         f = h5py.File(self.config.output_file, "w")
         images_group = f.create_group("images")
         f.create_group("metadata")
@@ -70,7 +71,6 @@ class HDF5Writer:
 
     def store_metadata(self, h5_file, metadata_df: pd.DataFrame) -> None:
         """Store metadata columns in HDF5 file."""
-        import h5py
         # Store metadata columns, handling strings explicitly for HDF5 compatibility
         for col in metadata_df.columns:
             col_data = metadata_df[col].values
@@ -105,7 +105,6 @@ class HDF5Writer:
         valid_indices: List[int] = []
         
         if self.config.store_raw_images:
-            from h5py import Dataset
             images_data = h5_file["images/data"]
             valid_mask_ds = h5_file["images/valid_mask"]
         
