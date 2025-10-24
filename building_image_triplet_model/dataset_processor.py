@@ -793,7 +793,11 @@ def main() -> None:
         try:
             dummy_cnn_model = timm.create_model(cnn_feature_model, pretrained=False)
             if hasattr(dummy_cnn_model, 'default_cfg') and 'input_size' in dummy_cnn_model.default_cfg:
-                cnn_image_size = dummy_cnn_model.default_cfg['input_size'][1]
+                input_size = dummy_cnn_model.default_cfg['input_size']
+                if isinstance(input_size, (list, tuple)) and len(input_size) > 1:
+                    cnn_image_size = input_size[1]
+                else:
+                    cnn_image_size = 224
             else:
                 cnn_image_size = 224
         except Exception:
