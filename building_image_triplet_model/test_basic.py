@@ -10,7 +10,6 @@ from building_image_triplet_model.preprocessing import (
     ProcessingConfig,
     update_config_file as _update_config_file,
 )
-from building_image_triplet_model.preprocessing.processor import DatasetProcessor
 from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 
 
@@ -68,9 +67,12 @@ def test_metadata_cache_functionality(tmp_path):
 
     # Create a mock .txt file
     # The 'd' line format is as follows:
-    # d DatasetID TargetID PatchID StreetViewID Target Point (lat, lon, h) Surface Normal (3) Street View Location (lat, lon, h) Distance Heading Pitch Roll
+    # d DatasetID TargetID PatchID StreetViewID Target Point (lat, lon, h)
+    # Surface Normal (3) Street View Location (lat, lon, h) Distance Heading Pitch Roll
     txt_file = subdir / "test.txt"
-    txt_content = """d 1 1 1 1 40.7128 -74.0060 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0"""
+    txt_content = (
+        "d 1 1 1 1 40.7128 -74.0060 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0"
+    )
     txt_file.write_text(txt_content)
 
     # Create a mock .jpg file

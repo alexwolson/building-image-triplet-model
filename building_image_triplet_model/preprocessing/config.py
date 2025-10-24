@@ -46,12 +46,14 @@ def infer_image_size_from_model(model_name: str, console: Console) -> int:
                 )
                 return image_size
         console.print(
-            f"[yellow]Could not infer image_size from model {model_name}, using default 224[/yellow]"
+            f"[yellow]Could not infer image_size from model {model_name}, "
+            f"using default 224[/yellow]"
         )
         return 224
     except Exception as e:
         console.print(
-            f"[red]Error inferring image_size from model {model_name}: {e}, using default 224[/red]"
+            f"[red]Error inferring image_size from model {model_name}: {e}, "
+            f"using default 224[/red]"
         )
         return 224
 
@@ -121,7 +123,8 @@ def update_config_file(config_path: Path, config: ProcessingConfig) -> None:
                 backbone_output_size = int(f.attrs["backbone_output_size"])
                 config_dict.setdefault("model", {})["backbone_output_size"] = backbone_output_size
                 console.print(
-                    f"[green]Updated config with backbone_output_size: {backbone_output_size}[/green]"
+                    f"[green]Updated config with "
+                    f"backbone_output_size: {backbone_output_size}[/green]"
                 )
     except Exception as e:
         console.print(f"[yellow]Could not read backbone_output_size from HDF5: {e}[/yellow]")

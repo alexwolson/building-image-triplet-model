@@ -1,6 +1,5 @@
 """Embedding computation for geo and backbone features."""
 
-import gc
 import logging
 from typing import List, Tuple
 
@@ -174,7 +173,8 @@ class EmbeddingComputer:
                     raise  # cannot reduce further
                 chunk_rows //= 2
                 self.logger.warning(
-                    f"MemoryError computing block {start}:{end}. Reducing chunk_rows to {chunk_rows}."
+                    f"MemoryError computing block {start}:{end}. "
+                    f"Reducing chunk_rows to {chunk_rows}."
                 )
                 continue  # retry with smaller chunk
 

@@ -2,7 +2,6 @@
 
 import gc
 import logging
-from pathlib import Path
 import sys
 
 from .config import ProcessingConfig
@@ -50,8 +49,6 @@ class DatasetProcessor:
         splits = metadata_manager.create_splits(target_ids)
 
         # Initialize HDF5 file
-        import h5py
-
         h5_file = hdf5_writer.initialize_hdf5(n_images, metadata_df)
 
         try:
@@ -97,8 +94,8 @@ class DatasetProcessor:
             )
             gc.collect()
 
-            # Process and store images
-            valid_indices = hdf5_writer.process_and_store_images(h5_file, metadata_df)
+            # Process and store images - valid_indices tracked in HDF5
+            hdf5_writer.process_and_store_images(h5_file, metadata_df)
 
         finally:
             h5_file.close()
