@@ -8,10 +8,11 @@ Usage:
   Standard training:
     python -m building_image_triplet_model.train --config config.yaml
 
-  Optuna HPO:
-    python -m building_image_triplet_model.train --optuna --storage ... --study-name ... [other optuna args]
+  Optuna HPO (with optuna.enabled: true in config):
+    python -m building_image_triplet_model.train --config config_optuna.yaml
 
-All static/default hyperparameters are loaded from the YAML config file.
+All configuration is managed through the YAML config file. The only command-line argument
+is --config to specify the config file location.
 """
 
 import argparse
@@ -97,7 +98,7 @@ def create_model_and_datamodule(config: dict, overrides: dict = None, use_precom
     return model, data_module
 
 
-def objective(trial: optuna.Trial, args: argparse.Namespace, config: dict) -> float:
+def objective(trial: optuna.Trial, config: dict) -> float:
     # Suggest hyperparameters
     lr = trial.suggest_float("lr", 1e-5, 5e-3, log=True)
     margin = trial.suggest_float("margin", 0.05, 0.5)
@@ -121,10 +122,11 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, config: dict) -> fl
     )
     # Logger
     run_name = f"trial_{trial.number}"
+    optuna_config = config.get("optuna", {})
     wandb_logger = WandbLogger(
-        project=args.project_name,
+        project=optuna_config.get("project_name", "geo-triplet-optuna"),
         name=run_name,
-        group=args.group_name or args.study_name,
+        group=optuna_config.get("group_name") or optuna_config.get("study_name", "optuna_study"),
         reinit=True,
         settings=wandb.Settings(start_method="fork"),
     )
@@ -141,8 +143,8 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, config: dict) -> fl
     trainer = Trainer(
         accelerator="auto",
         devices="auto",
-        max_epochs=args.max_epochs,
-        precision=args.precision,
+        max_epochs=config["train"]["max_epochs"],
+        precision=config["train"]["precision"],
         logger=wandb_logger,
         callbacks=[early_stop],
         enable_progress_bar=False,
@@ -160,44 +162,25 @@ def main():
     parser.add_argument(
         "--config", type=str, default="config.yaml", help="Path to YAML config file"
     )
-    parser.add_argument(
-        "--optuna", action="store_true", help="Run Optuna HPO instead of standard training"
-    )
-    # Optuna/cluster-specific args
-    parser.add_argument("--storage", type=str, help="Optuna storage URL")
-    parser.add_argument("--study-name", type=str, help="Optuna study name")
-    parser.add_argument("--project-name", default="geo-triplet-optuna", help="W&B project name")
-    parser.add_argument("--group-name", default=None, help="Optional W&B group")
-    parser.add_argument("--max-epochs", type=int, default=100, help="Maximum number of epochs")
-    parser.add_argument(
-        "--num-workers", type=int, default=4, help="Number of data loading workers"
-    )
-    parser.add_argument("--cache-size", type=int, default=1000, help="Cache size for dataset")
-    parser.add_argument("--freeze-backbone", action="store_true", help="Freeze backbone weights")
-    parser.add_argument(
-        "--precision", default="16-mixed", choices=["32", "16-mixed"], help="Training precision"
-    )
-    parser.add_argument("--offline", action="store_true", help="Disable W&B online sync")
-    parser.add_argument("--use-precomputed-embeddings", action="store_true", help="Use precomputed embeddings from HDF5")
-    parser.add_argument("--store-raw-images", action="store_true", help="Whether to store raw images in the HDF5 file")
     args = parser.parse_args()
     config = load_config(args.config)
     # Set random seeds
     seed = config["train"].get("seed", 42)
     seed_everything(seed)
-    if not torch.cuda.is_available() and args.precision != "32":
+    if not torch.cuda.is_available() and config["train"]["precision"] != "32":
         console.print("[yellow]CUDA not available; switching precision to 32.[/yellow]")
-        args.precision = "32"
-    if args.optuna:
+        config["train"]["precision"] = "32"
+    if config.get("optuna", {}).get("enabled", False):
         # Optuna HPO mode
-        if not args.storage or not args.study_name:
-            raise ValueError("Optuna mode requires --storage and --study-name")
+        optuna_config = config.get("optuna", {})
+        if not optuna_config.get("storage") or not optuna_config.get("study_name"):
+            raise ValueError("Optuna mode requires storage and study_name in config")
         import optuna
 
-        console.print(f"[green]Connecting to Optuna storage:[/green] {args.storage}")
+        console.print(f"[green]Connecting to Optuna storage:[/green] {optuna_config['storage']}")
         study = optuna.create_study(
-            study_name=args.study_name,
-            storage=args.storage,
+            study_name=optuna_config["study_name"],
+            storage=optuna_config["storage"],
             direction="minimize",
             load_if_exists=True,
             sampler=optuna.samplers.TPESampler(
@@ -206,7 +189,7 @@ def main():
             pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=0),
         )
         study.optimize(
-            lambda t: objective(t, args, config), n_trials=1, timeout=None, catch=(Exception,)
+            lambda t: objective(t, config), n_trials=1, timeout=None, catch=(Exception,)
         )
         try:
             console.print(
@@ -223,7 +206,7 @@ def main():
         wandb_logger = WandbLogger(
             project=config["logging"].get("project_name", "geo-triplet-net"),
             name=config["logging"].get("exp_name", None),
-            offline=args.offline,
+            offline=config["logging"]["offline"],
         )
         callbacks = [
             ModelCheckpoint(
@@ -236,17 +219,17 @@ def main():
             EarlyStopping(monitor="val_loss", patience=10, mode="min"),
             LearningRateMonitor(logging_interval="step"),
         ]
-        # Use CLI flags only when explicitly provided, otherwise use config defaults
-        use_precomputed_embeddings = args.use_precomputed_embeddings or config["data"].get("use_precomputed_embeddings", False)
-        store_raw_images = args.store_raw_images or config["data"].get("store_raw_images", True)
+        # Read all settings from config
+        use_precomputed_embeddings = config["data"].get("use_precomputed_embeddings", False)
+        store_raw_images = config["data"].get("store_raw_images", True)
         model, data_module = create_model_and_datamodule(config, use_precomputed_embeddings=use_precomputed_embeddings, store_raw_images=store_raw_images)
         trainer = Trainer(
-            max_epochs=args.max_epochs,
+            max_epochs=config["train"]["max_epochs"],
             limit_train_batches=steps_per_epoch,
             accelerator="auto",
             devices="auto",
             strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
-            precision=args.precision,
+            precision=config["train"]["precision"],
             logger=wandb_logger,
             callbacks=callbacks,
             log_every_n_steps=10,

@@ -46,14 +46,46 @@ export OPTUNA_STORAGE="sqlite:///${STUDY_DIR}/test_study.db"
 export STUDY_NAME="test_trial"
 
 # Use the new unified train.py CLI and YAML config
-srun "${VENV_DIR}/bin/python" -m building_image_triplet_model.train \
-      --config /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/config.yaml \
-      --optuna \
-      --storage "${OPTUNA_STORAGE}" \
-      --study-name "${STUDY_NAME}" \
-      --max-epochs 1 \
-      --num-workers ${SLURM_CPUS_PER_TASK} \
-      --precision 16-mixed \
-      --freeze-backbone
+# Create a temporary config file with test settings
+TEMP_CONFIG=$SLURM_TMPDIR/config_test.yaml
+cat > "${TEMP_CONFIG}" << EOF
+auto_batch_size:
+  enabled: false
+data:
+  batch_size: 32
+  num_workers: ${SLURM_CPUS_PER_TASK}
+  hdf5_path: "${DATASET_LOCAL}"
+  cache_size: 1000
+  use_precomputed_embeddings: false
+  store_raw_images: true
+logging:
+  project_name: "geo-triplet-test"
+  exp_name: "test_run"
+  checkpoint_dir: "checkpoints"
+  offline: false
+model:
+  backbone: "vit_pe_spatial_base_patch16_512.fb"
+  embedding_size: 128
+  freeze_backbone: true
+  margin: 1.0
+  pretrained: true
+train:
+  max_epochs: 1
+  precision: 16-mixed
+  lr: 0.0001
+  weight_decay: 0.0001
+  warmup_epochs: 3
+  difficulty_update_freq: 100
+  samples_per_epoch: 5000
+  seed: 42
+optuna:
+  enabled: true
+  storage: "${OPTUNA_STORAGE}"
+  study_name: "${STUDY_NAME}"
+  project_name: "geo-triplet-test"
+  group_name: null
+EOF
+
+srun "${VENV_DIR}/bin/python" -m building_image_triplet_model.train --config "${TEMP_CONFIG}"
 
 echo "Test completed at $(date)"

@@ -28,6 +28,8 @@ data:
   image_size: 512
   difficulty_metric: geo
   precompute_backbone_embeddings: false  # Set to true to precompute backbone embeddings
+  use_precomputed_embeddings: false  # Set to true to use precomputed embeddings from HDF5
+  store_raw_images: true  # Whether to store raw images in the HDF5 file
 
 logging:
   project_name: "geo-triplet-net"
@@ -54,3 +56,10 @@ train:
   seed: 42
   warmup_epochs: 3
   weight_decay: 0.0001
+
+optuna:
+  enabled: false  # Set to true to enable Optuna hyperparameter optimization
+  storage: "sqlite:///optuna_studies/building_triplet.db"  # Optuna storage URL
+  study_name: "building_triplet_study"  # Optuna study name
+  project_name: "geo-triplet-optuna"  # W&B project name for Optuna trials
+  group_name: null  # Optional W&B group name
