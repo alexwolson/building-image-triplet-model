@@ -553,7 +553,7 @@ class DatasetProcessor:
         model = GeoTripletNet(backbone=self.config.feature_model, pretrained=True).to(device)
         model.eval()
 
-        embeddings_shape = (len(metadata_df), model.hparams["embedding_size"])
+        embeddings_shape = (len(metadata_df), model.hparams.get("embedding_size", 128))
         embeddings_ds = h5_file.create_dataset(
             "backbone_embeddings",
             shape=embeddings_shape,
@@ -593,7 +593,7 @@ class DatasetProcessor:
             except Exception as e:
                 self.logger.warning(f"Skipping image {img_path} due to error: {e}")
                 # Store a zero vector for problematic images
-                embeddings_ds[idx] = np.zeros(model.hparams["embedding_size"], dtype=np.float32)
+                embeddings_ds[idx] = np.zeros(model.hparams.get("embedding_size", 128), dtype=np.float32)
 
         # Process any remaining images in the last batch
         if batch_imgs:
