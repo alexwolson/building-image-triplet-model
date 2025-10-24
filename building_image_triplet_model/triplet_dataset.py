@@ -84,7 +84,7 @@ class GeoTripletDataset(Dataset):
             self.embeddings_dataset = self.h5_file["images"]["data"]
             logger.info("Using raw images.")
         else:
-            raise ValueError("Cannot use raw images or precomputed embeddings. Set use_precomputed_embeddings or store_raw_images to True.")
+            raise ValueError("Either use_precomputed_embeddings or store_raw_images must be True.")
         # Load split-specific matrices and metadata
         assert self.h5_file is not None, "HDF5 file must be open."
         try:
