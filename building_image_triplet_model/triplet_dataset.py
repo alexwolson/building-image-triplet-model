@@ -1,4 +1,4 @@
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 import logging
 import math
@@ -147,10 +147,10 @@ class GeoTripletDataset(Dataset):
 
     def _create_target_mapping(self) -> Dict[Any, List[int]]:
         """Map each target_id -> list of local indices in this dataset's subset."""
-        mapping: Dict[Any, List[int]] = {}
+        mapping: Dict[Any, List[int]] = defaultdict(list)
         for local_idx, target_id in enumerate(self.target_ids):
-            mapping.setdefault(target_id, []).append(local_idx)
-        return mapping
+            mapping[target_id].append(local_idx)
+        return dict(mapping)
 
     def _init_difficulty_levels(self, num_levels: int) -> List[TripletDifficulty]:
         """Build difficulty bands using quantiles of the distance matrix."""

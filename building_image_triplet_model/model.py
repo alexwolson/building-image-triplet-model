@@ -84,6 +84,15 @@ class GeoTripletNet(LightningModule):
         self.current_train_batch: int = 0
         self.train_dataset: Optional[Any] = None
 
+    def _compute_triplet_metrics(
+        self, anchor_emb: torch.Tensor, positive_emb: torch.Tensor, negative_emb: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute pairwise distances and accuracy for triplet embeddings."""
+        pos_dist = torch.nn.functional.pairwise_distance(anchor_emb, positive_emb)
+        neg_dist = torch.nn.functional.pairwise_distance(anchor_emb, negative_emb)
+        acc = (pos_dist < neg_dist).float().mean()
+        return pos_dist, neg_dist, acc
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass: returns embedding for input batch."""
         if self.use_precomputed_embeddings:
@@ -115,11 +124,11 @@ class GeoTripletNet(LightningModule):
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         self.training_step_outputs.append(loss)
         with torch.no_grad():
-            pos_dist = torch.nn.functional.pairwise_distance(anchor_emb, positive_emb)
-            neg_dist = torch.nn.functional.pairwise_distance(anchor_emb, negative_emb)
+            pos_dist, neg_dist, acc = self._compute_triplet_metrics(
+                anchor_emb, positive_emb, negative_emb
+            )
             self.log("train_pos_dist", pos_dist.mean(), on_step=False, on_epoch=True)
             self.log("train_neg_dist", neg_dist.mean(), on_step=False, on_epoch=True)
-            acc = (pos_dist < neg_dist).float().mean()
             self.log("train_acc", acc, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
@@ -135,25 +144,28 @@ class GeoTripletNet(LightningModule):
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.validation_step_outputs.append(loss)
         with torch.no_grad():
-            pos_dist = torch.nn.functional.pairwise_distance(anchor_emb, positive_emb)
-            neg_dist = torch.nn.functional.pairwise_distance(anchor_emb, negative_emb)
+            pos_dist, neg_dist, acc = self._compute_triplet_metrics(
+                anchor_emb, positive_emb, negative_emb
+            )
             self.log("val_pos_dist", pos_dist.mean(), on_step=False, on_epoch=True)
             self.log("val_neg_dist", neg_dist.mean(), on_step=False, on_epoch=True)
-            acc = (pos_dist < neg_dist).float().mean()
             self.log("val_acc", acc, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
+    def _log_epoch_average(self, outputs: list[torch.Tensor], metric_name: str) -> None:
+        """Helper to compute and log epoch average."""
+        if outputs:
+            epoch_average = torch.stack(outputs).mean()
+            self.log(metric_name, epoch_average)
+            outputs.clear()
+
     def on_train_epoch_end(self) -> None:
         """Called at the end of the training epoch."""
-        epoch_average = torch.stack(self.training_step_outputs).mean()
-        self.log("train_epoch_loss", epoch_average)
-        self.training_step_outputs.clear()
+        self._log_epoch_average(self.training_step_outputs, "train_epoch_loss")
 
     def on_validation_epoch_end(self) -> None:
         """Called at the end of the validation epoch."""
-        epoch_average = torch.stack(self.validation_step_outputs).mean()
-        self.log("val_epoch_loss", epoch_average)
-        self.validation_step_outputs.clear()
+        self._log_epoch_average(self.validation_step_outputs, "val_epoch_loss")
 
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers."""
