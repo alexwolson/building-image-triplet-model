@@ -34,11 +34,6 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest~=7.4.0"]
-dev = [
-    "black~=25.1.0",
-    "isort~=6.0.1",
-    "flake8~=7.2.0"
-]
 
 [tool.black]
 line-length = 99
