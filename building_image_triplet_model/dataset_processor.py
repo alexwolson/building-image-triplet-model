@@ -772,11 +772,13 @@ def main() -> None:
                 dummy_model = timm.create_model(feature_model, pretrained=False)
                 if hasattr(dummy_model, 'default_cfg') and 'input_size' in dummy_model.default_cfg:
                     # default_cfg['input_size'] is (C, H, W), we need H or W
-                    image_size = dummy_model.default_cfg['input_size'][1] # Assuming square images
-                    console.print(f"[green]Inferred image_size={image_size} from backbone {feature_model}[/green]")
-                else:
-                    console.print(f"[yellow]Could not infer image_size from backbone {feature_model}, defaulting to 224.[/yellow]")
-                    image_size = 224
+                    input_size = dummy_model.default_cfg['input_size']
+                    if isinstance(input_size, (list, tuple)) and len(input_size) > 1:
+                        image_size = input_size[1] # Assuming square images
+                        console.print(f"[green]Inferred image_size={image_size} from backbone {feature_model}[/green]")
+                    else:
+                        console.print(f"[yellow]Could not infer image_size from backbone {feature_model} (unexpected input_size format), defaulting to 224.[/yellow]")
+                        image_size = 224
             except Exception as e:
                 console.print(f"[red]Error inferring image_size from backbone {feature_model}: {e}, defaulting to 224.[/red]")
                 image_size = 224
