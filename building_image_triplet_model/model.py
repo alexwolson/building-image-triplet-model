@@ -157,11 +157,19 @@ class GeoTripletNet(LightningModule):
         return loss
 
     def _log_epoch_average(self, outputs: list[torch.Tensor], metric_name: str) -> None:
-        """Helper to compute and log epoch average."""
-        if outputs:
-            epoch_average = torch.stack(outputs).mean()
-            self.log(metric_name, epoch_average)
-            outputs.clear()
+        """Helper to compute and log epoch average.
+
+        Raises:
+            RuntimeError: If outputs is empty, indicating no training/validation steps were executed.
+        """
+        if not outputs:
+            raise RuntimeError(
+                f"Cannot compute {metric_name}: no outputs collected. "
+                "This indicates that no training/validation steps were executed during the epoch."
+            )
+        epoch_average = torch.stack(outputs).mean()
+        self.log(metric_name, epoch_average)
+        outputs.clear()
 
     def on_train_epoch_end(self) -> None:
         """Called at the end of the training epoch."""

@@ -1,11 +1,15 @@
-from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
-from building_image_triplet_model.dataset_processor import DatasetProcessor, ProcessingConfig
-from building_image_triplet_model.model import GeoTripletNet
-from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 import pandas as pd
 import pytest
 from pytorch_lightning import Trainer
 import torch
+
+from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
+from building_image_triplet_model.dataset_processor import (
+    DatasetProcessor,
+    ProcessingConfig,
+)
+from building_image_triplet_model.model import GeoTripletNet
+from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 
 
 class DummyDataset(torch.utils.data.Dataset):
@@ -38,6 +42,29 @@ def test_dummy_training_step():
         max_epochs=1, limit_train_batches=1, logger=False, enable_checkpointing=False
     )
     trainer.fit(model, train_dataloaders=loader)
+
+
+def test_log_epoch_average_empty_outputs():
+    """Test that _log_epoch_average raises an error when outputs is empty."""
+    model = GeoTripletNet(pretrained=False)
+
+    # Test that empty list raises RuntimeError
+    with pytest.raises(RuntimeError, match="no outputs collected"):
+        model._log_epoch_average([], "test_metric")
+
+
+def test_log_epoch_average_with_outputs():
+    """Test that _log_epoch_average works correctly with valid outputs."""
+    model = GeoTripletNet(pretrained=False)
+
+    # Create some dummy tensors
+    outputs = [torch.tensor(1.0), torch.tensor(2.0), torch.tensor(3.0)]
+
+    # This should not raise an error and should clear the list
+    model._log_epoch_average(outputs, "test_metric")
+
+    # Verify that outputs were cleared
+    assert len(outputs) == 0
 
 
 def test_dataset_loading(tmp_path):
