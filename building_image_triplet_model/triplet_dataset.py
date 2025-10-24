@@ -1,4 +1,4 @@
-from collections import OrderedDict, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 import logging
 import math
@@ -28,9 +28,10 @@ class TripletDifficulty:
     def update(self, loss: float, threshold: float = 0.3) -> bool:
         """
         Update the success rate using the specified threshold.
-        If loss > threshold => "success".
+        If loss < threshold => "success" (good triplet, model performing well).
+        UCB will then prefer difficulties with LOW success_rate (high loss, challenging).
         """
-        success = loss > threshold
+        success = loss < threshold
         self.success_rate = (self.success_rate * self.num_attempts + float(success)) / (
             self.num_attempts + 1
         )
@@ -54,6 +55,7 @@ class GeoTripletDataset(Dataset):
         transform: Optional[Any] = None,
         use_precomputed_embeddings: bool = False,
         store_raw_images: bool = True,
+        difficulty_update_window: int = 32,
     ):
         logger.info(f"Initializing GeoTripletDataset for split='{split}'...")
         self.hdf5_path = hdf5_path
@@ -71,6 +73,7 @@ class GeoTripletDataset(Dataset):
         self.row_cache_size = 1024
         self.rng = np.random.default_rng()
         self.ucb_alpha = ucb_alpha
+        self.difficulty_update_window = difficulty_update_window
 
         self.use_precomputed_embeddings = use_precomputed_embeddings
         self.store_raw_images = store_raw_images
@@ -122,6 +125,8 @@ class GeoTripletDataset(Dataset):
         self.target_ids = all_target_ids[self.valid_indices]
         self.target_to_indices = self._create_target_mapping()
         self.difficulty_levels = self._init_difficulty_levels(num_difficulty_levels)
+        # Track which difficulty level was used for each sample index
+        self.sample_difficulty_map: Dict[int, int] = {}
         logger.info(
             f"GeoTripletDataset split='{split}' created with {len(self.valid_indices)} samples."
         )
@@ -206,19 +211,23 @@ class GeoTripletDataset(Dataset):
         self.row_cache[anchor_row] = row
         return row
 
-    def _get_negative_sample(self, anchor_idx: int) -> int:
-        """Sample a negative index based on difficulty, fallback to random if needed."""
+    def _get_negative_sample(self, anchor_idx: int) -> Tuple[int, int]:
+        """
+        Sample a negative index based on difficulty, fallback to random if needed.
+        Returns tuple of (negative_idx, difficulty_level_index).
+        """
         chosen_diff = self._select_difficulty_level()
         chosen_idx = self.difficulty_levels.index(chosen_diff)
         for i in range(chosen_idx, len(self.difficulty_levels)):
             diff = self.difficulty_levels[i]
             neg_idx = self._get_negative_in_logdist_band(anchor_idx, diff)
             if neg_idx is not None:
-                return neg_idx
+                return neg_idx, i
         logger.info(
             "No valid negative found in any difficulty level. Fallback to random local index."
         )
-        return int(self.rng.integers(0, len(self.valid_indices)))
+        # Fallback: return random index with the originally chosen difficulty level
+        return int(self.rng.integers(0, len(self.valid_indices))), chosen_idx
 
     def _get_negative_in_logdist_band(
         self, anchor_idx: int, difficulty: TripletDifficulty
@@ -231,9 +240,10 @@ class GeoTripletDataset(Dataset):
             row_of_diffs <= difficulty.max_distance
         )
         candidate_rows = np.where(mask)[0]
+        # Filter out anchor row BEFORE checking if empty
+        candidate_rows = candidate_rows[candidate_rows != anchor_row]
         if len(candidate_rows) == 0:
             return None
-        candidate_rows = candidate_rows[candidate_rows != anchor_row]
         # Exclude the anchor's own TargetID to guarantee a true negative.
         valid_tids = [
             self.target_id_order[row_idx]
@@ -304,7 +314,9 @@ class GeoTripletDataset(Dataset):
             positive_idx = anchor_idx
         else:
             positive_idx = self.rng.choice(positive_candidates)
-        negative_idx = self._get_negative_sample(anchor_idx)
+        negative_idx, difficulty_level = self._get_negative_sample(anchor_idx)
+        # Track which difficulty level was used for this sample
+        self.sample_difficulty_map[idx] = difficulty_level
         # Safety guard: ensure the negative comes from a different TargetID.
         if self.target_ids[negative_idx] == anchor_tid:
             diff_indices = np.where(self.target_ids != anchor_tid)[0]
@@ -323,13 +335,39 @@ class GeoTripletDataset(Dataset):
         return len(self.valid_indices)
 
     def update_difficulty(self, loss: float) -> None:
-        """Update the difficulty level based on the current loss."""
-        current_diff = self._select_difficulty_level()
-        current_diff.update(loss)
+        """
+        Update difficulty levels based on the current batch loss.
+
+        Note: This method updates difficulty statistics based on the most recently
+        selected difficulty level. Due to batching, this is an approximation since
+        different samples in a batch may have used different difficulty levels.
+        The loss value represents the average over the batch.
+
+        For proper per-sample tracking, the training loop would need to pass
+        sample indices along with their corresponding losses.
+        """
+        # Get the most commonly used difficulty level from recent samples
+        if self.sample_difficulty_map:
+            # Use most recent difficulty levels from the map
+            recent_difficulties = list(self.sample_difficulty_map.values())[
+                -self.difficulty_update_window :
+            ]
+            if recent_difficulties:
+                # Update the most commonly used difficulty level
+                most_common_idx = Counter(recent_difficulties).most_common(1)[0][0]
+                diff_to_update = self.difficulty_levels[most_common_idx]
+            else:
+                # Fallback: use UCB selection
+                diff_to_update = self._select_difficulty_level()
+        else:
+            # Fallback: use UCB selection
+            diff_to_update = self._select_difficulty_level()
+
+        diff_to_update.update(loss)
         logger.info(
-            f"Updated difficulty level: {current_diff.min_distance:.4f} "
-            f"to {current_diff.max_distance:.4f} with success rate "
-            f"{current_diff.success_rate:.4f} and {current_diff.num_attempts} attempts."
+            f"Updated difficulty level: {diff_to_update.min_distance:.4f} "
+            f"to {diff_to_update.max_distance:.4f} with success rate "
+            f"{diff_to_update.success_rate:.4f} and {diff_to_update.num_attempts} attempts."
         )
 
     def close(self) -> None:

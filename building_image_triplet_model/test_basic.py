@@ -1,11 +1,15 @@
-from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
-from building_image_triplet_model.dataset_processor import DatasetProcessor, ProcessingConfig
-from building_image_triplet_model.model import GeoTripletNet
-from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 import pandas as pd
 import pytest
 from pytorch_lightning import Trainer
 import torch
+
+from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
+from building_image_triplet_model.dataset_processor import (
+    DatasetProcessor,
+    ProcessingConfig,
+)
+from building_image_triplet_model.model import GeoTripletNet
+from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 
 
 class DummyDataset(torch.utils.data.Dataset):
