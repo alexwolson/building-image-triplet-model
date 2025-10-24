@@ -14,6 +14,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 class GeoTripletNet(LightningModule):
     """
     PyTorch Lightning module for geographical triplet network.
+
+    This model operates on precomputed backbone embeddings rather than raw images.
+    It consists of a projection head that maps backbone features to a lower-dimensional
+    embedding space where triplet loss is computed.
     """
 
     def __init__(
@@ -24,13 +28,25 @@ class GeoTripletNet(LightningModule):
         weight_decay: float = 1e-4,
         warmup_epochs: int = 3,
         backbone: str = "eva02_base_patch14_224.mim_in22k",
-        pretrained: bool = True,
         difficulty_update_freq: int = 100,
-        freeze_backbone: bool = False,
         backbone_output_size: Optional[int] = None,
     ):
+        """
+        Initialize GeoTripletNet.
+
+        Args:
+            embedding_size: Dimensionality of the output embedding space.
+            margin: Margin for triplet loss.
+            lr: Learning rate for the optimizer.
+            weight_decay: Weight decay (L2 regularization) for the optimizer.
+            warmup_epochs: Number of epochs for learning rate warmup.
+            backbone: Name of the backbone model (used to determine input feature size).
+            difficulty_update_freq: Frequency (in batches) to update triplet difficulty.
+            backbone_output_size: Explicit size of backbone output features. If None,
+                will be automatically determined from the backbone model.
+        """
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters()  # Saves all __init__ parameters to self.hparams
 
         # Always use precomputed embeddings - no backbone needed
         # Determine the backbone output size for the projection head
@@ -60,9 +76,7 @@ class GeoTripletNet(LightningModule):
         # Loss function
         self.triplet_loss: nn.Module = nn.TripletMarginLoss(margin=margin)
 
-        # Metrics
-        self.training_step_outputs: list[torch.Tensor] = []
-        self.validation_step_outputs: list[torch.Tensor] = []
+        # Training state
         self.current_train_batch: int = 0
         self.train_dataset: Optional[Any] = None
 
@@ -96,12 +110,11 @@ class GeoTripletNet(LightningModule):
         loss = self.triplet_loss(anchor_emb, positive_emb, negative_emb)
         if (
             self.train_dataset is not None
-            and self.current_train_batch % self.hparams["difficulty_update_freq"] == 0
+            and self.current_train_batch % self.hparams.difficulty_update_freq == 0
         ):
             self.train_dataset.update_difficulty(loss.item())
         self.current_train_batch += 1
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.training_step_outputs.append(loss)
         with torch.no_grad():
             pos_dist, neg_dist, acc = self._compute_triplet_metrics(
                 anchor_emb, positive_emb, negative_emb
@@ -121,7 +134,6 @@ class GeoTripletNet(LightningModule):
         negative_emb = self(negative)
         loss = self.triplet_loss(anchor_emb, positive_emb, negative_emb)
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.validation_step_outputs.append(loss)
         with torch.no_grad():
             pos_dist, neg_dist, acc = self._compute_triplet_metrics(
                 anchor_emb, positive_emb, negative_emb
@@ -131,30 +143,15 @@ class GeoTripletNet(LightningModule):
             self.log("val_acc", acc, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
-    def _log_epoch_average(self, outputs: list[torch.Tensor], metric_name: str) -> None:
-        """Helper to compute and log epoch average."""
-        if outputs:
-            epoch_average = torch.stack(outputs).mean()
-            self.log(metric_name, epoch_average)
-            outputs.clear()
-
-    def on_train_epoch_end(self) -> None:
-        """Called at the end of the training epoch."""
-        self._log_epoch_average(self.training_step_outputs, "train_epoch_loss")
-
-    def on_validation_epoch_end(self) -> None:
-        """Called at the end of the validation epoch."""
-        self._log_epoch_average(self.validation_step_outputs, "val_epoch_loss")
-
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.hparams["lr"],
-            weight_decay=self.hparams["weight_decay"],
+            lr=self.hparams.lr,
+            weight_decay=self.hparams.weight_decay,
         )
         max_epochs: int = getattr(self.trainer, "max_epochs", 1) if self.trainer else 1
-        warmup_epochs: int = self.hparams.get("warmup_epochs", 0)
+        warmup_epochs: int = self.hparams.warmup_epochs
         if warmup_epochs > 0:
             warmup = LinearLR(
                 optimizer,
@@ -179,7 +176,7 @@ class GeoTripletNet(LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss",
+                "interval": "epoch",
             },
         }
 

@@ -34,9 +34,7 @@ logging:
 model:
   backbone: vit_pe_spatial_base_patch16_512.fb
   embedding_size: 128
-  freeze_backbone: false
   margin: 1.0
-  pretrained: true
   # Backbone output size for precomputed embeddings (auto-determined if not set)
   # For vit_pe_spatial_base_patch16_512.fb, this is typically 768
   backbone_output_size: null

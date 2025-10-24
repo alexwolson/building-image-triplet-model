@@ -41,8 +41,16 @@ console = Console()
 
 
 def load_config(config_path: str | Path) -> dict:
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+    try:
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Configuration file not found: {config_path}. "
+            "Please ensure the file exists and the path is correct."
+        )
+    except yaml.YAMLError as e:
+        raise ValueError(f"Error parsing YAML configuration file: {e}")
 
 
 def create_model_and_datamodule(
@@ -64,8 +72,6 @@ def create_model_and_datamodule(
     embedding_size = overrides.get("embedding_size", config["model"].get("embedding_size", 128))
     margin = overrides.get("margin", config["model"].get("margin", 1.0))
     backbone = config["model"].get("backbone", "tf_efficientnetv2_s.in21k_ft_in1k")
-    pretrained = config["model"].get("pretrained", True)
-    freeze_backbone = config["model"].get("freeze_backbone", False)
     backbone_output_size = config["model"].get("backbone_output_size", None)
     # Training
     lr = overrides.get("lr", config["train"].get("lr", 1e-4))
@@ -90,9 +96,7 @@ def create_model_and_datamodule(
         weight_decay=weight_decay,
         warmup_epochs=warmup_epochs,
         backbone=backbone,
-        pretrained=pretrained,
         difficulty_update_freq=difficulty_update_freq,
-        freeze_backbone=freeze_backbone,
         backbone_output_size=backbone_output_size,
     )
     return model, data_module
@@ -133,6 +137,10 @@ def objective(trial: optuna.Trial, config: dict) -> float:
     wandb_logger.log_hyperparams(trial.params)
     # Model/DataModule
     model, data_module = create_model_and_datamodule(config, overrides)
+    # Determine precision with CPU fallback
+    precision = config["train"]["precision"]
+    if not torch.cuda.is_available() and precision != "32":
+        precision = "32"
     # Trainer
     early_stop = EarlyStopping(
         monitor="val_loss",
@@ -144,14 +152,19 @@ def objective(trial: optuna.Trial, config: dict) -> float:
         accelerator="auto",
         devices="auto",
         max_epochs=config["train"]["max_epochs"],
-        precision=config["train"]["precision"],
+        precision=precision,
         logger=wandb_logger,
         callbacks=[early_stop],
         enable_progress_bar=False,
     )
     trainer.fit(model, data_module)
+    if "val_loss" not in trainer.callback_metrics:
+        raise RuntimeError(
+            "Validation loss not found in callback metrics. "
+            "Ensure the model has a validation step and validation data is provided."
+        )
     val_loss = trainer.callback_metrics["val_loss"].item()
-    wandb_logger.experiment.finish()
+    wandb.finish()
     return val_loss
 
 
@@ -167,9 +180,11 @@ def main():
     # Set random seeds
     seed = config["train"].get("seed", 42)
     seed_everything(seed)
-    if not torch.cuda.is_available() and config["train"]["precision"] != "32":
+    # Determine precision with CPU fallback (without mutating config)
+    precision = config["train"]["precision"]
+    if not torch.cuda.is_available() and precision != "32":
         console.print("[yellow]CUDA not available; switching precision to 32.[/yellow]")
-        config["train"]["precision"] = "32"
+        precision = "32"
     if config.get("optuna", {}).get("enabled", False):
         # Optuna HPO mode
         optuna_config = config.get("optuna", {})
@@ -205,7 +220,7 @@ def main():
         wandb_logger = WandbLogger(
             project=config["logging"].get("project_name", "geo-triplet-net"),
             name=config["logging"].get("exp_name", None),
-            offline=config["logging"]["offline"],
+            offline=config["logging"].get("offline", False),
         )
         callbacks = [
             ModelCheckpoint(
@@ -226,7 +241,7 @@ def main():
             accelerator="auto",
             devices="auto",
             strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
-            precision=config["train"]["precision"],
+            precision=precision,
             logger=wandb_logger,
             callbacks=callbacks,
             log_every_n_steps=10,

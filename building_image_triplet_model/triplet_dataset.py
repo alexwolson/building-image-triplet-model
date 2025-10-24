@@ -1,4 +1,4 @@
-from collections import Counter, OrderedDict, defaultdict
+from collections import Counter, OrderedDict, defaultdict, deque
 from dataclasses import dataclass
 import logging
 import math
@@ -61,7 +61,7 @@ class GeoTripletDataset(Dataset):
         self.transform = transform
         self.split = split
         self.cache_size = cache_size
-        self.cache: Dict[int, np.ndarray] = {}
+        self.cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
         self.tensor_cache: "OrderedDict[int, torch.Tensor]" = OrderedDict()
         self.row_cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
         self.row_cache_size = 1024
@@ -89,7 +89,8 @@ class GeoTripletDataset(Dataset):
             knn_dist_key = f"knn_distances_geo_{split}"
             if knn_idx_key not in self.h5_file["metadata"]:
                 raise KeyError(
-                    f"KNN datasets '{knn_idx_key}' not found in HDF5. Please regenerate with new processor."
+                    f"KNN datasets '{knn_idx_key}' not found in HDF5. "
+                    "Please regenerate with new processor."
                 )
             self.knn_indices = self.h5_file["metadata"][knn_idx_key]
             self.knn_distances = self.h5_file["metadata"][knn_dist_key]
@@ -112,7 +113,8 @@ class GeoTripletDataset(Dataset):
         self.target_to_indices = self._create_target_mapping()
         self.difficulty_levels = self._init_difficulty_levels(num_difficulty_levels)
         # Track which difficulty level was used for each sample index
-        self.sample_difficulty_map: Dict[int, int] = {}
+        # Use deque with maxlen to prevent unbounded memory growth
+        self.sample_difficulty_history: "deque[int]" = deque(maxlen=difficulty_update_window)
         logger.info(
             f"GeoTripletDataset split='{split}' created with {len(self.valid_indices)} samples."
         )
@@ -181,7 +183,10 @@ class GeoTripletDataset(Dataset):
         return self.difficulty_levels[np.argmax(scores)]
 
     def _get_distance_row(self, anchor_row: int) -> np.ndarray:
-        """Return a synthetic full-distance row using KNN distances; non-stored entries are +inf."""
+        """
+        Return a synthetic full-distance row using KNN distances.
+        Non-stored entries are +inf.
+        """
         if anchor_row in self.row_cache:
             return self.row_cache[anchor_row]
 
@@ -190,7 +195,8 @@ class GeoTripletDataset(Dataset):
         knn_idx = self.knn_indices[anchor_row].astype(np.int64)
         knn_dist = self.knn_distances[anchor_row].astype(np.float32)
         row[knn_idx] = knn_dist
-        # self-distance already inf.
+        # Explicitly set self-distance to inf for clarity
+        row[anchor_row] = np.inf
 
         if len(self.row_cache) >= self.row_cache_size:
             self.row_cache.pop(next(iter(self.row_cache)))
@@ -212,8 +218,8 @@ class GeoTripletDataset(Dataset):
         logger.info(
             "No valid negative found in any difficulty level. Fallback to random local index."
         )
-        # Fallback: return random index with the originally chosen difficulty level
-        return int(self.rng.integers(0, len(self.valid_indices))), chosen_idx
+        # Fallback: return random index with -1 to indicate random sampling was used
+        return int(self.rng.integers(0, len(self.valid_indices))), -1
 
     def _get_negative_in_logdist_band(
         self, anchor_idx: int, difficulty: TripletDifficulty
@@ -287,8 +293,6 @@ class GeoTripletDataset(Dataset):
         else:
             positive_idx = self.rng.choice(positive_candidates)
         negative_idx, difficulty_level = self._get_negative_sample(anchor_idx)
-        # Track which difficulty level was used for this sample
-        self.sample_difficulty_map[idx] = difficulty_level
         # Safety guard: ensure the negative comes from a different TargetID.
         if self.target_ids[negative_idx] == anchor_tid:
             diff_indices = np.where(self.target_ids != anchor_tid)[0]
@@ -297,6 +301,11 @@ class GeoTripletDataset(Dataset):
                 logger.warning("All samples share the same TargetID; using anchor as negative.")
             else:
                 negative_idx = int(self.rng.choice(diff_indices))
+                # Mark difficulty as -1 since we had to use fallback
+                difficulty_level = -1
+        # Track which difficulty level was used for this sample (after safety guard)
+        if difficulty_level >= 0:
+            self.sample_difficulty_history.append(difficulty_level)
         anchor_tensor = self._get_tensor(anchor_idx)
         positive_tensor = self._get_tensor(positive_idx)
         negative_tensor = self._get_tensor(negative_idx)
@@ -319,18 +328,10 @@ class GeoTripletDataset(Dataset):
         sample indices along with their corresponding losses.
         """
         # Get the most commonly used difficulty level from recent samples
-        if self.sample_difficulty_map:
-            # Use most recent difficulty levels from the map
-            recent_difficulties = list(self.sample_difficulty_map.values())[
-                -self.difficulty_update_window :
-            ]
-            if recent_difficulties:
-                # Update the most commonly used difficulty level
-                most_common_idx = Counter(recent_difficulties).most_common(1)[0][0]
-                diff_to_update = self.difficulty_levels[most_common_idx]
-            else:
-                # Fallback: use UCB selection
-                diff_to_update = self._select_difficulty_level()
+        if self.sample_difficulty_history:
+            # Update the most commonly used difficulty level from recent history
+            most_common_idx = Counter(self.sample_difficulty_history).most_common(1)[0][0]
+            diff_to_update = self.difficulty_levels[most_common_idx]
         else:
             # Fallback: use UCB selection
             diff_to_update = self._select_difficulty_level()
@@ -354,6 +355,7 @@ class GeoTripletDataset(Dataset):
         """Cleanup when the dataset is destroyed."""
         try:
             self.close()
-        except Exception as e:
+        except Exception:
             # Ignore errors during cleanup to avoid issues during interpreter shutdown
-            logger.debug(f"Error during dataset cleanup: {e}")
+            # Don't use logger here as it may be garbage collected already
+            pass
