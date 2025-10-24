@@ -1,6 +1,6 @@
 # GeoTripletDataModule Code Review
 
-**Date:** 2024-10-24  
+**Date:** 2025-10-24  
 **Reviewer:** GitHub Copilot  
 **PyTorch Lightning Version:** 2.5.5  
 **File:** `building_image_triplet_model/datamodule.py`
