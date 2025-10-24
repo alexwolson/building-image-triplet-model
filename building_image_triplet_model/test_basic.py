@@ -5,6 +5,10 @@ import pytest
 from pytorch_lightning import Trainer
 import torch
 from .triplet_dataset import GeoTripletDataset
+from .dataset_processor import DatasetProcessor, ProcessingConfig
+from pathlib import Path
+import tempfile
+import pandas as pd
 
 
 class DummyDataset(torch.utils.data.Dataset):
@@ -46,3 +50,67 @@ def test_dataset_loading(tmp_path):
         ds = GeoTripletDataset(hdf5_path="dummy.h5", split="train")
     except Exception:
         pass  # Expected to fail without a real file
+
+
+def test_metadata_cache_functionality(tmp_path):
+    """Test that the metadata caching mechanism works correctly."""
+    # Create a temporary directory with some mock .txt files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    
+    # Create a subdirectory structure
+    subdir = input_dir / "0001" / "0001"
+    subdir.mkdir(parents=True)
+    
+    # Create a mock .txt file
+    # The 'd' line format is as follows:
+    # d DatasetID TargetID PatchID StreetViewID Target Point (lat, lon, h) Surface Normal (3) Street View Location (lat, lon, h) Distance Heading Pitch Roll
+    txt_file = subdir / "test.txt"
+    txt_content = """d 1 1 1 1 40.7128 -74.0060 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0"""
+    txt_file.write_text(txt_content)
+    
+    # Create a mock .jpg file
+    jpg_file = subdir / "test.jpg"
+    jpg_file.write_bytes(b"fake image data")
+    
+    # Create config
+    config = ProcessingConfig(
+        input_dir=input_dir,
+        output_file=tmp_path / "output.h5",
+        n_samples=None,
+        batch_size=10,
+        image_size=224
+    )
+    
+    # Create processor
+    processor = DatasetProcessor(config)
+    
+    # Test cache path generation
+    cache_path = processor._get_cache_path()
+    assert cache_path.name == "metadata_cache_complete.pkl"
+    
+    temp_cache_path = processor._get_temp_cache_path()
+    assert temp_cache_path.name == "metadata_cache_building.pkl"
+    
+    # Test cache save/load with mock data
+    mock_df = pd.DataFrame({
+        "DatasetID": [1],
+        "TargetID": [1],
+        "PatchID": [1],
+        "StreetViewID": [1],
+        "Image filename": ["test.jpg"],
+        "Subpath": ["0001/0001"],
+        "Target Point Latitude": [40.7128],
+        "Target Point Longitude": [-74.0060],
+    })
+    
+    # Save cache
+    processor._save_metadata_cache(mock_df)
+    assert cache_path.exists()
+    assert not temp_cache_path.exists()  # Should be moved to final location
+    
+    # Load cache
+    loaded_df = processor._load_metadata_cache()
+    assert loaded_df is not None
+    assert len(loaded_df) == 1
+    assert loaded_df.iloc[0]["DatasetID"] == 1

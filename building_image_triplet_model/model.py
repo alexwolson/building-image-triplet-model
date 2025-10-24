@@ -27,26 +27,46 @@ class GeoTripletNet(LightningModule):
         pretrained: bool = True,
         difficulty_update_freq: int = 100,
         freeze_backbone: bool = False,
+        use_precomputed_embeddings: bool = False,
+        backbone_output_size: Optional[int] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        # Initialize backbone
-        self.backbone: nn.Module = timm.create_model(
-            backbone, pretrained=pretrained, num_classes=0
-        )
-        # Robustly get in_features for timm models
-        in_features: Optional[int] = getattr(self.backbone, "num_features", None)
-        if in_features is None:
-            # Try common fallback
-            in_features = getattr(getattr(self.backbone, "head", None), "in_features", None)
-        if in_features is None:
-            raise ValueError("Could not determine in_features for backbone.")
+        self.use_precomputed_embeddings = use_precomputed_embeddings
 
-        if freeze_backbone:
-            for param in self.backbone.parameters():
-                param.requires_grad = False
-            self.backbone.eval()
+        if not self.use_precomputed_embeddings:
+            # Initialize backbone
+            self.backbone: nn.Module = timm.create_model(
+                backbone, pretrained=pretrained, num_classes=0
+            )
+            # Robustly get in_features for timm models
+            in_features: Optional[int] = getattr(self.backbone, "num_features", None)
+            if in_features is None:
+                # Try common fallback
+                in_features = getattr(getattr(self.backbone, "head", None), "in_features", None)
+            if in_features is None:
+                raise ValueError("Could not determine in_features for backbone.")
+
+            if freeze_backbone:
+                for param in self.backbone.parameters():
+                    param.requires_grad = False
+                self.backbone.eval()
+        else:
+            # If using precomputed embeddings, we need to determine the backbone output size
+            if backbone_output_size is not None:
+                # Use explicitly provided backbone output size from config
+                in_features = backbone_output_size
+            else:
+                # Dynamically determine backbone output size
+                temp_backbone = timm.create_model(backbone, pretrained=False, num_classes=0)
+                in_features = getattr(temp_backbone, "num_features", None)
+                if in_features is None:
+                    # Try common fallback
+                    in_features = getattr(getattr(temp_backbone, "head", None), "in_features", None)
+                if in_features is None:
+                    raise ValueError(f"Could not determine in_features for backbone '{backbone}' when using precomputed embeddings.")
+                del temp_backbone  # Clean up temporary model
 
         # Projection head
         self.embedding: nn.Module = nn.Sequential(
@@ -66,13 +86,19 @@ class GeoTripletNet(LightningModule):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass: returns embedding for input batch."""
-        features = self.backbone(x)
+        if self.use_precomputed_embeddings:
+            features = x
+        else:
+            features = self.backbone(x)
         embeddings = self.embedding(features)
         return embeddings
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """Returns the embedding for a batch of images (forward-only, no loss)."""
-        features = self.backbone(x)
+        if self.use_precomputed_embeddings:
+            features = x
+        else:
+            features = self.backbone(x)
         embeddings = self.embedding(features)
         return embeddings
 

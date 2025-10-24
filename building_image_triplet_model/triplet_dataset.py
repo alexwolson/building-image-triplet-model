@@ -52,6 +52,8 @@ class GeoTripletDataset(Dataset):
         ucb_alpha: float = 2.0,
         cache_size: int = 1000,
         transform: Optional[Any] = None,
+        use_precomputed_embeddings: bool = False,
+        store_raw_images: bool = True,
     ):
         logger.info(f"Initializing GeoTripletDataset for split='{split}'...")
         self.hdf5_path = hdf5_path
@@ -69,6 +71,20 @@ class GeoTripletDataset(Dataset):
         self.row_cache_size = 1024
         self.rng = np.random.default_rng()
         self.ucb_alpha = ucb_alpha
+
+        self.use_precomputed_embeddings = use_precomputed_embeddings
+        self.store_raw_images = store_raw_images
+
+        if self.use_precomputed_embeddings:
+            if "backbone_embeddings" not in self.h5_file:
+                raise ValueError(f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}")
+            self.embeddings_dataset = self.h5_file["backbone_embeddings"]
+            logger.info("Using precomputed backbone embeddings.")
+        elif self.store_raw_images:
+            self.embeddings_dataset = self.h5_file["images"]["data"]
+            logger.info("Using raw images.")
+        else:
+            raise ValueError("Either use_precomputed_embeddings or store_raw_images must be True.")
         # Load split-specific matrices and metadata
         assert self.h5_file is not None, "HDF5 file must be open."
         try:
@@ -235,41 +251,45 @@ class GeoTripletDataset(Dataset):
         neg_local_index = int(self.rng.choice(neg_candidates))
         return neg_local_index
 
-    def _get_image(self, local_idx: int) -> np.ndarray:
-        """Retrieve raw uint8 image array given local index."""
+    def _get_data(self, local_idx: int) -> np.ndarray:
+        """Retrieve raw uint8 image array or precomputed embedding given local index."""
         global_idx = self.valid_indices[local_idx]
         if global_idx in self.cache:
             return self.cache[global_idx]
         assert self.h5_file is not None, "HDF5 file must be open."
         try:
-            dataset = self.h5_file["images"]["data"]  # type: ignore
-            # This is always safe for HDF5 datasets, but the type checker cannot know this.
-            img = dataset[global_idx]  # type: ignore
-            img = np.array(img)
+            data = self.embeddings_dataset[global_idx]  # type: ignore
+            data = np.array(data)
         except Exception as e:
-            logger.error(f"Failed to load image at index {global_idx}: {e}")
+            logger.error(f"Failed to load data at index {global_idx}: {e}")
             raise
         if len(self.cache) >= self.cache_size:
             self.cache.pop(next(iter(self.cache)))
-        self.cache[global_idx] = img
-        return img
+        self.cache[global_idx] = data
+        return data
 
     def _get_tensor(self, local_idx: int) -> torch.Tensor:
-        """Load image, apply transforms, return CHW float tensor in [0,1], with caching."""
+        """Load image/embedding, apply transforms if image, return CHW float tensor, with caching."""
         if local_idx in self.tensor_cache:
             return self.tensor_cache[local_idx]
-        img = self._get_image(local_idx)
-        try:
-            img_pil = Image.fromarray(img)
-        except Exception as e:
-            logger.error(f"Failed to convert image to PIL: {e}")
-            raise
-        if self.transform:
-            img_pil = self.transform(img_pil)
-        if isinstance(img_pil, torch.Tensor):
-            tensor = img_pil
+        
+        data = self._get_data(local_idx)
+
+        if self.use_precomputed_embeddings:
+            tensor = torch.from_numpy(data).float()
         else:
-            tensor = to_tensor(img_pil)
+            try:
+                img_pil = Image.fromarray(data)
+            except Exception as e:
+                logger.error(f"Failed to convert image to PIL: {e}")
+                raise
+            if self.transform:
+                img_pil = self.transform(img_pil)
+            if isinstance(img_pil, torch.Tensor):
+                tensor = img_pil
+            else:
+                tensor = to_tensor(img_pil)
+
         if len(self.tensor_cache) >= self.cache_size:
             self.tensor_cache.pop(next(iter(self.tensor_cache)))
         self.tensor_cache[local_idx] = tensor

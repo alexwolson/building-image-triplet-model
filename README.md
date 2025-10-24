@@ -12,47 +12,93 @@ This project requires **Python 3.12**. All dependencies are managed via `require
 
 ## Configuration
 
-All training and data parameters are managed via a YAML config file (default: `config.yaml`).
+All training and data parameters are managed via a YAML config file. Copy `config.example.yaml` to `config.yaml` and update the paths for your environment.
 
-Example `config.yaml`:
+**Important**: Both scripts now require the `--config` argument to be specified explicitly. There are no CLI argument overrides - all configuration must be done through the YAML file.
+
+Example `config.example.yaml`:
 
 ```yaml
 auto_batch_size:
-  enabled: false
-  mode: power
+  enabled: false  # Set to true to automatically find the best batch size
+  mode: power     # Options: power, binsearch
+
 data:
+  # Path to the processed HDF5 dataset file
   hdf5_path: "data/processed/dataset.h5"
+  
+  # Input directory containing raw images
+  input_dir: "data/raw/images"
+  
+  # Training parameters
   batch_size: 32
   num_workers: 4
   num_difficulty_levels: 5
   ucb_alpha: 2.0
   cache_size: 1000
-
-model:
-  embedding_size: 128
-  margin: 1.0
-  backbone: "tf_efficientnetv2_s.in21k_ft_in1k"
-  pretrained: true
-  freeze_backbone: false
-
-train:
-  max_epochs: 100
-  lr: 0.0001
-  weight_decay: 0.0001
-  warmup_epochs: 3
-  samples_per_epoch: 5000
-  seed: 42
-  precision: "16-mixed"
-  difficulty_update_freq: 100
+  
+  # Model configuration
+  cnn_feature_model: mobilenetv3_small_075
+  cnn_image_size: 128
+  feature_model: vit_pe_spatial_base_patch16_512.fb
+  image_size: 512
+  difficulty_metric: geo
+  precompute_backbone_embeddings: false  # Set to true to precompute backbone embeddings
+  use_precomputed_embeddings: false  # Set to true to use precomputed embeddings from HDF5
+  store_raw_images: true  # Whether to store raw images in the HDF5 file
 
 logging:
   project_name: "geo-triplet-net"
-  exp_name: null
+  exp_name: null  # Set to a specific name for this experiment
   checkpoint_dir: "checkpoints"
-  offline: false
+  offline: false  # Set to true to disable wandb logging
+
+model:
+  backbone: vit_pe_spatial_base_patch16_512.fb
+  embedding_size: 128
+  freeze_backbone: false
+  margin: 1.0
+  pretrained: true
+  # Backbone output size for precomputed embeddings (auto-determined if not set)
+  backbone_output_size: null
+
+train:
+  difficulty_update_freq: 100
+  lr: 0.0001
+  max_epochs: 100
+  precision: 16-mixed
+  samples_per_epoch: 5000
+  seed: 42
+  warmup_epochs: 3
+  weight_decay: 0.0001
+
+optuna:
+  enabled: false  # Set to true to enable Optuna hyperparameter optimization
+  storage: "sqlite:///optuna_studies/building_triplet.db"  # Optuna storage URL
+  study_name: "building_triplet_study"  # Optuna study name
+  project_name: "geo-triplet-optuna"  # W&B project name for Optuna trials
+  group_name: null  # Optional W&B group name
 ```
 
 - Set `auto_batch_size.enabled: true` to automatically find the best batch size before training.
+
+### Precomputed Embeddings Configuration
+
+When using precomputed embeddings (`data.use_precomputed_embeddings: true`), the model needs to know the backbone output size to properly configure the projection head. The system handles this in two ways:
+
+1. **Explicit Configuration**: Set `model.backbone_output_size` in your config file (recommended for performance)
+   ```yaml
+   model:
+     backbone_output_size: 768  # For vit_pe_spatial_base_patch16_512.fb
+   ```
+
+2. **Automatic Detection**: If not specified, the system will automatically determine the backbone output size by creating a temporary model instance. This works but adds a small overhead during model initialization.
+
+For common backbones:
+- `vit_pe_spatial_base_patch16_512.fb`: 768
+- `resnet18`: 512
+- `resnet50`: 2048
+- `efficientnet-b0`: 1280
 
 ## Usage
 
@@ -64,9 +110,34 @@ python -m building_image_triplet_model.train --config config.yaml
 
 ### Optuna Hyperparameter Optimization
 
-```bash
-python -m building_image_triplet_model.train --config config.yaml --optuna --storage sqlite:///optuna_study.db --study-name my_study
+To enable Optuna hyperparameter optimization, set `optuna.enabled: true` in your config file:
+
+```yaml
+optuna:
+  enabled: true
+  storage: "sqlite:///optuna_studies/building_triplet.db"
+  study_name: "building_triplet_study"
+  project_name: "geo-triplet-optuna"
 ```
+
+Then run:
+```bash
+python -m building_image_triplet_model.train --config config.yaml
+```
+
+### Dataset Processing
+
+To process raw images into HDF5 format for training:
+
+```bash
+python -m building_image_triplet_model.dataset_processor --config config.yaml
+```
+
+This will:
+- Parse metadata from `.txt` files in the input directory
+- Process and resize images
+- Compute embeddings using the specified feature model
+- Save everything to an HDF5 file for efficient training
 
 ### Running Tests
 
@@ -83,11 +154,13 @@ This will check:
 
 ## SLURM Usage
 
-The SLURM scripts in `slurm/` are updated to use the new CLI and YAML config. Example:
+The SLURM scripts in `slurm/` are updated to use the new YAML config. Example:
 
 ```bash
-srun python building_image_triplet_model/train.py --config config.yaml --optuna --storage sqlite:///optuna_study.db --study-name my_study
+srun python -m building_image_triplet_model.train --config config.yaml
 ```
+
+For Optuna optimization, set `optuna.enabled: true` in your config file instead of using CLI arguments.
 
 ## Project Organization
 
