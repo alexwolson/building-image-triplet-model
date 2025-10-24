@@ -550,7 +550,7 @@ class DatasetProcessor:
     def _precompute_backbone_embeddings(self, h5_file: h5py.File, metadata_df: pd.DataFrame) -> None:
         self.logger.info("Precomputing backbone embeddings...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = GeoTripletNet(pretrained=True).to(device)
+        model = GeoTripletNet(backbone=self.config.feature_model, pretrained=True).to(device)
         model.eval()
 
         embeddings_shape = (len(metadata_df), model.hparams["embedding_size"])
@@ -565,7 +565,7 @@ class DatasetProcessor:
         prep = transforms.Compose(
             [
                 transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
-                transforms.Resize((model.hparams["image_size"], model.hparams["image_size"])),
+                transforms.Resize((self.config.image_size, self.config.image_size)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
