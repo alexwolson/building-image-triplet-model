@@ -8,7 +8,38 @@ A short description of the project.
 
 ## Python Version
 
-This project requires **Python 3.12**. All dependencies are managed via `requirements.txt` and `pyproject.toml`.
+This project requires **Python 3.12**. All dependencies are managed via `uv` and `pyproject.toml`.
+
+## Installation
+
+### Prerequisites
+
+Install `uv` if you haven't already:
+
+```bash
+# On macOS and Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# On Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Or with pip
+pip install uv
+```
+
+### Setup
+
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   uv sync
+   ```
+3. Activate the virtual environment:
+   ```bash
+   source .venv/bin/activate  # On Unix/macOS
+   # or
+   .venv\Scripts\activate     # On Windows
+   ```
 
 ## Configuration
 
@@ -102,7 +133,7 @@ For common backbones:
 ### Standard Training
 
 ```bash
-python -m building_image_triplet_model.train --config config.yaml
+uv run python -m building_image_triplet_model.train --config config.yaml
 ```
 
 ### Optuna Hyperparameter Optimization
@@ -119,7 +150,7 @@ optuna:
 
 Then run:
 ```bash
-python -m building_image_triplet_model.train --config config.yaml
+uv run python -m building_image_triplet_model.train --config config.yaml
 ```
 
 ### Dataset Processing
@@ -127,7 +158,7 @@ python -m building_image_triplet_model.train --config config.yaml
 To process raw images into HDF5 format for training:
 
 ```bash
-python -m building_image_triplet_model.dataset_processor --config config.yaml
+uv run python -m building_image_triplet_model.dataset_processor --config config.yaml
 ```
 
 This will:
@@ -141,7 +172,7 @@ This will:
 To run the minimal test suite (requires pytest):
 
 ```bash
-pytest building_image_triplet_model/test_basic.py
+uv run pytest building_image_triplet_model/test_basic.py
 ```
 
 This will check:
@@ -154,7 +185,7 @@ This will check:
 The SLURM scripts in `slurm/` are updated to use the new YAML config. Example:
 
 ```bash
-srun python -m building_image_triplet_model.train --config config.yaml
+srun uv run python -m building_image_triplet_model.train --config config.yaml
 ```
 
 For Optuna optimization, set `optuna.enabled: true` in your config file instead of using CLI arguments.
@@ -184,9 +215,7 @@ For Optuna optimization, set `optuna.enabled: true` in your config file instead 
 ├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
 │   └── figures        <- Generated graphics and figures to be used in reporting
 │
-├── requirements.txt   <- The requirements file for reproducing the analysis environment
-│
-├── setup.cfg          <- Configuration file for flake8
+├── pyproject.toml     <- Project configuration and dependencies
 │
 └── building_image_triplet_model   <- Source code for use in this project.
     │
