@@ -55,6 +55,7 @@ class GeoTripletDataset(Dataset):
         transform: Optional[Any] = None,
         use_precomputed_embeddings: bool = False,
         store_raw_images: bool = True,
+        difficulty_update_window: int = 32,
     ):
         logger.info(f"Initializing GeoTripletDataset for split='{split}'...")
         self.hdf5_path = hdf5_path
@@ -72,6 +73,7 @@ class GeoTripletDataset(Dataset):
         self.row_cache_size = 1024
         self.rng = np.random.default_rng()
         self.ucb_alpha = ucb_alpha
+        self.difficulty_update_window = difficulty_update_window
 
         self.use_precomputed_embeddings = use_precomputed_embeddings
         self.store_raw_images = store_raw_images
@@ -347,7 +349,9 @@ class GeoTripletDataset(Dataset):
         # Get the most commonly used difficulty level from recent samples
         if self.sample_difficulty_map:
             # Use most recent difficulty levels from the map
-            recent_difficulties = list(self.sample_difficulty_map.values())[-32:]  # Last batch
+            recent_difficulties = list(self.sample_difficulty_map.values())[
+                -self.difficulty_update_window :
+            ]
             if recent_difficulties:
                 # Update the most commonly used difficulty level
                 most_common_idx = Counter(recent_difficulties).most_common(1)[0][0]

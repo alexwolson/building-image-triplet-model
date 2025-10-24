@@ -43,7 +43,7 @@ class TestTripletDifficulty:
             min_distance=0.0, max_distance=1.0, success_rate=0.5, num_attempts=0
         )
 
-        # At threshold should be success (not strictly less than)
+        # At threshold should be failure (not strictly less than)
         success = diff.update(0.3, threshold=0.3)
         assert success is False, "Loss at threshold (0.3 == 0.3) should be failure"
         assert diff.success_rate == 0.0, "Success rate should be 0.0"
