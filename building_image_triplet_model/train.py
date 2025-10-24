@@ -11,8 +11,8 @@ Usage:
   Optuna HPO (with optuna.enabled: true in config):
     python -m building_image_triplet_model.train --config config_optuna.yaml
 
-All configuration is managed through the YAML config file. The only command-line argument
-is --config to specify the config file location.
+All configuration is managed through the YAML config file. The --config argument is required
+to specify the config file location.
 """
 
 import argparse
@@ -161,7 +161,7 @@ def main():
         description="Unified training script for standard and Optuna HPO modes."
     )
     parser.add_argument(
-        "--config", type=str, default="config.yaml", help="Path to YAML config file"
+        "--config", type=str, required=True, help="Path to YAML config file (required)"
     )
     args = parser.parse_args()
     config = load_config(args.config)

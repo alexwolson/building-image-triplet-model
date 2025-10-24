@@ -731,79 +731,61 @@ class DatasetProcessor:
             gc.collect()
 
 
-def main() -> None:
+def _infer_image_size_from_model(model_name: str, console: Console) -> int:
+    """Infer image size from a TIMM model's default configuration."""
+    try:
+        dummy_model = timm.create_model(model_name, pretrained=False)
+        if hasattr(dummy_model, 'default_cfg') and 'input_size' in dummy_model.default_cfg:
+            input_size = dummy_model.default_cfg['input_size']
+            if isinstance(input_size, (list, tuple)) and len(input_size) > 1:
+                image_size = input_size[1]  # Assuming square images
+                console.print(f"[green]Inferred image_size={image_size} from model {model_name}[/green]")
+                return image_size
+        console.print(f"[yellow]Could not infer image_size from model {model_name}, using default 224[/yellow]")
+        return 224
+    except Exception as e:
+        console.print(f"[red]Error inferring image_size from model {model_name}: {e}, using default 224[/red]")
+        return 224
+
+
+def _load_processing_config(config_path: Path) -> ProcessingConfig:
+    """Load and create ProcessingConfig from YAML file."""
     console = Console()
-    parser = argparse.ArgumentParser(description="Process building typology dataset")
-    parser.add_argument("--config", type=Path, default="config.yaml", help="Path to YAML config file")
-    parser.add_argument("--input-dir", type=Path, help="Input directory (overrides config)")
-    parser.add_argument("--output-file", type=Path, help="Output HDF5 file (overrides config)")
-    parser.add_argument("--n-samples", type=int, help="Number of target samples (overrides config)")
-    parser.add_argument("--n-images", type=int, help="Max number of images to process (overrides config)")
-    parser.add_argument("--batch-size", type=int, help="Batch size (overrides config)")
-    parser.add_argument("--num-workers", type=int, help="Number of workers (overrides config)")
-    parser.add_argument("--image-size", type=int, help="Image size (overrides config)")
-    parser.add_argument("--difficulty-metric", choices=["geo", "cnn"], help="Difficulty metric (overrides config)")
-    parser.add_argument("--feature-model", help="Feature model (overrides config)")
-    parser.add_argument("--store-raw-images", action='store_true', help="Whether to store raw images in the HDF5 file (overrides config)")
-    parser.add_argument("--cnn-batch-size", type=int, help="Batch size for CNN embedding computation (overrides config)")
-    parser.add_argument("--cnn-feature-model", help="TIMM model name for CNN similarity (overrides config)")
-    parser.add_argument("--cnn-image-size", type=int, help="Input size for CNN similarity model (overrides config)")
-    parser.add_argument("--precompute-backbone-embeddings", action='store_true', help="Precompute backbone embeddings and store in HDF5 (overrides config)")
-    args = parser.parse_args()
-    # Load config from YAML
-    with open(args.config, "r") as f:
+    
+    with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
-    # Use 'data' section for all relevant fields
+    
     data_cfg = config_dict.get("data", {})
-    # Override with CLI if provided
-    input_dir = args.input_dir or Path(data_cfg.get("input_dir", "data/raw"))
-    output_file = args.output_file or Path(data_cfg.get("hdf5_path", "data/processed/dataset.h5"))
-    n_samples = args.n_samples if args.n_samples is not None else data_cfg.get("n_samples", None)
-    n_images = args.n_images if args.n_images is not None else data_cfg.get("n_images", None)
-    batch_size = args.batch_size if args.batch_size is not None else data_cfg.get("batch_size", 100)
-    num_workers = args.num_workers if args.num_workers is not None else data_cfg.get("num_workers", 4)
-    image_size = args.image_size
+    
+    # Get basic paths
+    input_dir = Path(data_cfg.get("input_dir", "data/raw"))
+    output_file = Path(data_cfg.get("hdf5_path", "data/processed/dataset.h5"))
+    
+    # Get sampling parameters
+    n_samples = data_cfg.get("n_samples", None)
+    n_images = data_cfg.get("n_images", None)
+    
+    # Get processing parameters
+    batch_size = data_cfg.get("batch_size", 100)
+    num_workers = data_cfg.get("num_workers", 4)
+    difficulty_metric = data_cfg.get("difficulty_metric", "geo")
+    feature_model = data_cfg.get("feature_model", "resnet18")
+    store_raw_images = data_cfg.get("store_raw_images", True)
+    precompute_backbone_embeddings = data_cfg.get("precompute_backbone_embeddings", False)
+    
+    # Handle image sizes with proper inference
+    image_size = data_cfg.get("image_size")
     if image_size is None:
-        image_size = data_cfg.get("image_size")
-        if image_size is None:
-            # Infer from backbone
-            feature_model = data_cfg.get("feature_model", "resnet18")
-            try:
-                dummy_model = timm.create_model(feature_model, pretrained=False)
-                if hasattr(dummy_model, 'default_cfg') and 'input_size' in dummy_model.default_cfg:
-                    # default_cfg['input_size'] is (C, H, W), we need H or W
-                    input_size = dummy_model.default_cfg['input_size']
-                    if isinstance(input_size, (list, tuple)) and len(input_size) > 1:
-                        image_size = input_size[1] # Assuming square images
-                        console.print(f"[green]Inferred image_size={image_size} from backbone {feature_model}[/green]")
-                    else:
-                        console.print(f"[yellow]Could not infer image_size from backbone {feature_model} (unexpected input_size format), defaulting to 224.[/yellow]")
-                        image_size = 224
-            except Exception as e:
-                console.print(f"[red]Error inferring image_size from backbone {feature_model}: {e}, defaulting to 224.[/red]")
-                image_size = 224
-    difficulty_metric = args.difficulty_metric or data_cfg.get("difficulty_metric", "geo")
-    feature_model = args.feature_model or data_cfg.get("feature_model", "resnet18")
-    store_raw_images = args.store_raw_images or data_cfg.get("store_raw_images", True)
-    cnn_batch_size = args.cnn_batch_size if args.cnn_batch_size is not None else data_cfg.get("cnn_batch_size", 32)
-    cnn_feature_model = args.cnn_feature_model or data_cfg.get("cnn_feature_model", "resnet18")
-    cnn_image_size = args.cnn_image_size if args.cnn_image_size is not None else data_cfg.get("cnn_image_size")
-    precompute_backbone_embeddings = args.precompute_backbone_embeddings or data_cfg.get("precompute_backbone_embeddings", False)
+        image_size = _infer_image_size_from_model(feature_model, console)
+    
+    cnn_feature_model = data_cfg.get("cnn_feature_model", "resnet18")
+    cnn_image_size = data_cfg.get("cnn_image_size")
     if cnn_image_size is None:
-        try:
-            dummy_cnn_model = timm.create_model(cnn_feature_model, pretrained=False)
-            if hasattr(dummy_cnn_model, 'default_cfg') and 'input_size' in dummy_cnn_model.default_cfg:
-                input_size = dummy_cnn_model.default_cfg['input_size']
-                if isinstance(input_size, (list, tuple)) and len(input_size) > 1:
-                    cnn_image_size = input_size[1]
-                else:
-                    cnn_image_size = 224
-            else:
-                cnn_image_size = 224
-        except Exception:
-            cnn_image_size = 224
-    # Build ProcessingConfig
-    config = ProcessingConfig(
+        cnn_image_size = _infer_image_size_from_model(cnn_feature_model, console)
+    
+    cnn_batch_size = data_cfg.get("cnn_batch_size", 32)
+    
+    return ProcessingConfig(
         input_dir=input_dir,
         output_file=output_file,
         n_samples=n_samples,
@@ -819,18 +801,26 @@ def main() -> None:
         cnn_image_size=cnn_image_size,
         precompute_backbone_embeddings=precompute_backbone_embeddings,
     )
-    processor = DatasetProcessor(config)
-    processor.process_dataset()
-    # Update YAML config with the processed HDF5 path and backbone output size
-    config_dict.setdefault("data", {})["hdf5_path"] = str(output_file)
-    config_dict.setdefault("data", {})["image_size"] = image_size
-    config_dict.setdefault("data", {})["cnn_feature_model"] = cnn_feature_model
-    config_dict.setdefault("data", {})["cnn_image_size"] = cnn_image_size
+
+
+def _update_config_file(config_path: Path, config: ProcessingConfig) -> None:
+    """Update the YAML config file with processed values."""
+    console = Console()
     
-    # If backbone embeddings were precomputed, read the backbone output size from HDF5 and update config
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+    
+    # Update data section with processed values
+    config_dict.setdefault("data", {})
+    config_dict["data"]["hdf5_path"] = str(config.output_file)
+    config_dict["data"]["image_size"] = config.image_size
+    config_dict["data"]["cnn_feature_model"] = config.cnn_feature_model
+    config_dict["data"]["cnn_image_size"] = config.cnn_image_size
+    
+    # If backbone embeddings were precomputed, read the backbone output size from HDF5
     if config.precompute_backbone_embeddings:
         try:
-            with h5py.File(output_file, "r") as f:
+            with h5py.File(config.output_file, "r") as f:
                 if 'backbone_output_size' in f.attrs:
                     backbone_output_size = int(f.attrs['backbone_output_size'])
                     config_dict.setdefault("model", {})["backbone_output_size"] = backbone_output_size
@@ -838,8 +828,25 @@ def main() -> None:
         except Exception as e:
             console.print(f"[yellow]Could not read backbone_output_size from HDF5: {e}[/yellow]")
     
-    with open(args.config, "w") as f:
+    # Write updated config back to file
+    with open(config_path, "w") as f:
         yaml.safe_dump(config_dict, f)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Process building typology dataset")
+    parser.add_argument("--config", type=Path, required=True, help="Path to YAML config file (required)")
+    args = parser.parse_args()
+    
+    # Load configuration
+    config = _load_processing_config(args.config)
+    
+    # Process dataset
+    processor = DatasetProcessor(config)
+    processor.process_dataset()
+    
+    # Update config file with processed values
+    _update_config_file(args.config, config)
 
 
 if __name__ == "__main__":
