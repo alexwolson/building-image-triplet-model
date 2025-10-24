@@ -46,7 +46,7 @@ class MetadataManager:
             cached_input_dir = cache_data.get("input_dir")
             if cached_input_dir is None:
                 self.logger.warning(
-                    "Cache does not contain input_dir metadata. " "Invalidating cache for safety."
+                    "Cache does not contain input_dir metadata. Invalidating cache for safety."
                 )
                 return None
 
