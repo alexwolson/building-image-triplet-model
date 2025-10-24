@@ -61,6 +61,7 @@ def create_model_and_datamodule(config: dict, overrides: dict = None, use_precom
     backbone = config["model"].get("backbone", "tf_efficientnetv2_s.in21k_ft_in1k")
     pretrained = config["model"].get("pretrained", True)
     freeze_backbone = config["model"].get("freeze_backbone", False)
+    backbone_output_size = config["model"].get("backbone_output_size", None)
     # Training
     lr = overrides.get("lr", config["train"].get("lr", 1e-4))
     weight_decay = overrides.get("weight_decay", config["train"].get("weight_decay", 1e-4))
@@ -91,6 +92,7 @@ def create_model_and_datamodule(config: dict, overrides: dict = None, use_precom
         difficulty_update_freq=difficulty_update_freq,
         freeze_backbone=freeze_backbone,
         use_precomputed_embeddings=use_precomputed_embeddings,
+        backbone_output_size=backbone_output_size,
     )
     return model, data_module
 

@@ -68,6 +68,24 @@ train:
 
 - Set `auto_batch_size.enabled: true` to automatically find the best batch size before training.
 
+### Precomputed Embeddings Configuration
+
+When using precomputed embeddings (`--use-precomputed-embeddings`), the model needs to know the backbone output size to properly configure the projection head. The system handles this in two ways:
+
+1. **Explicit Configuration**: Set `model.backbone_output_size` in your config file (recommended for performance)
+   ```yaml
+   model:
+     backbone_output_size: 768  # For vit_pe_spatial_base_patch16_512.fb
+   ```
+
+2. **Automatic Detection**: If not specified, the system will automatically determine the backbone output size by creating a temporary model instance. This works but adds a small overhead during model initialization.
+
+For common backbones:
+- `vit_pe_spatial_base_patch16_512.fb`: 768
+- `resnet18`: 512
+- `resnet50`: 2048
+- `efficientnet-b0`: 1280
+
 ## Usage
 
 ### Standard Training

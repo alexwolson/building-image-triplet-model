@@ -28,6 +28,7 @@ class GeoTripletNet(LightningModule):
         difficulty_update_freq: int = 100,
         freeze_backbone: bool = False,
         use_precomputed_embeddings: bool = False,
+        backbone_output_size: Optional[int] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -52,8 +53,20 @@ class GeoTripletNet(LightningModule):
                     param.requires_grad = False
                 self.backbone.eval()
         else:
-            # If using precomputed embeddings, the input size is the embedding size
-            in_features = embedding_size
+            # If using precomputed embeddings, we need to determine the backbone output size
+            if backbone_output_size is not None:
+                # Use explicitly provided backbone output size from config
+                in_features = backbone_output_size
+            else:
+                # Dynamically determine backbone output size
+                temp_backbone = timm.create_model(backbone, pretrained=False, num_classes=0)
+                in_features = getattr(temp_backbone, "num_features", None)
+                if in_features is None:
+                    # Try common fallback
+                    in_features = getattr(getattr(temp_backbone, "head", None), "in_features", None)
+                if in_features is None:
+                    raise ValueError(f"Could not determine in_features for backbone '{backbone}' when using precomputed embeddings.")
+                del temp_backbone  # Clean up temporary model
 
         # Projection head
         self.embedding: nn.Module = nn.Sequential(
