@@ -1,0 +1,52 @@
+# Example configuration file for building-image-triplet-model
+# Copy this file to config.yaml and update the paths for your environment
+
+auto_batch_size:
+  enabled: false  # Set to true to automatically find the best batch size
+  mode: power     # Options: power, binsearch
+
+data:
+  # Path to the processed HDF5 dataset file
+  # Update this path to point to your dataset location
+  hdf5_path: "data/processed/dataset.h5"
+  
+  # Input directory containing raw images
+  # Update this path to point to your raw image directory
+  input_dir: "data/raw/images"
+  
+  # Training parameters
+  batch_size: 32
+  num_workers: 4
+  num_difficulty_levels: 5
+  ucb_alpha: 2.0
+  cache_size: 1000
+  
+  # Model configuration
+  cnn_feature_model: mobilenetv3_small_075
+  cnn_image_size: 128
+  feature_model: vit_pe_spatial_base_patch16_512.fb
+  image_size: 512
+  difficulty_metric: geo
+
+logging:
+  project_name: "geo-triplet-net"
+  exp_name: null  # Set to a specific name for this experiment
+  checkpoint_dir: "checkpoints"
+  offline: false  # Set to true to disable wandb logging
+
+model:
+  backbone: vit_pe_spatial_base_patch16_512.fb
+  embedding_size: 128
+  freeze_backbone: false
+  margin: 1.0
+  pretrained: true
+
+train:
+  difficulty_update_freq: 100
+  lr: 0.0001
+  max_epochs: 100
+  precision: 16-mixed
+  samples_per_epoch: 5000
+  seed: 42
+  warmup_epochs: 3
+  weight_decay: 0.0001

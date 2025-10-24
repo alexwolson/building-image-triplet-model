@@ -42,7 +42,7 @@ def load_config(config_path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
-def create_model_and_datamodule(config: dict, overrides: dict = {}):
+def create_model_and_datamodule(config: dict, overrides: dict = {}, use_precomputed_embeddings: bool = False, store_raw_images: bool = True):
     """Create model and datamodule, optionally overriding config values (e.g., for Optuna)."""
     # Data
     hdf5_path = config["data"]["hdf5_path"]
@@ -76,6 +76,8 @@ def create_model_and_datamodule(config: dict, overrides: dict = {}):
         ucb_alpha=ucb_alpha,
         cache_size=cache_size,
         difficulty_metric=difficulty_metric,
+        use_precomputed_embeddings=use_precomputed_embeddings,
+        store_raw_images=store_raw_images,
     )
     model = GeoTripletNet(
         embedding_size=embedding_size,
@@ -87,6 +89,7 @@ def create_model_and_datamodule(config: dict, overrides: dict = {}):
         pretrained=pretrained,
         difficulty_update_freq=difficulty_update_freq,
         freeze_backbone=freeze_backbone,
+        use_precomputed_embeddings=use_precomputed_embeddings,
     )
     return model, data_module
 
@@ -172,6 +175,8 @@ def main():
         "--precision", default="16-mixed", choices=["32", "16-mixed"], help="Training precision"
     )
     parser.add_argument("--offline", action="store_true", help="Disable W&B online sync")
+    parser.add_argument("--use-precomputed-embeddings", action="store_true", help="Use precomputed embeddings from HDF5")
+    parser.add_argument("--store-raw-images", type=bool, help="Whether to store raw images in the HDF5 file")
     args = parser.parse_args()
     config = load_config(args.config)
     # Set random seeds
@@ -228,7 +233,7 @@ def main():
             EarlyStopping(monitor="val_loss", patience=10, mode="min"),
             LearningRateMonitor(logging_interval="step"),
         ]
-        model, data_module = create_model_and_datamodule(config)
+        model, data_module = create_model_and_datamodule(config, use_precomputed_embeddings=args.use_precomputed_embeddings, store_raw_images=args.store_raw_images)
         trainer = Trainer(
             max_epochs=args.max_epochs,
             limit_train_batches=steps_per_epoch,

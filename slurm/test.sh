@@ -46,7 +46,7 @@ export OPTUNA_STORAGE="sqlite:///${STUDY_DIR}/test_study.db"
 export STUDY_NAME="test_trial"
 
 # Use the new unified train.py CLI and YAML config
-srun "${VENV_DIR}/bin/python" /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/building_image_triplet_model/train.py \
+srun "${VENV_DIR}/bin/python" -m building_image_triplet_model.train \
       --config /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/config.yaml \
       --optuna \
       --storage "${OPTUNA_STORAGE}" \
