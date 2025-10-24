@@ -43,9 +43,7 @@ class GeoTripletNet(LightningModule):
             in_features = getattr(temp_backbone, "num_features", None)
             if in_features is None:
                 # Try common fallback
-                in_features = getattr(
-                    getattr(temp_backbone, "head", None), "in_features", None
-                )
+                in_features = getattr(getattr(temp_backbone, "head", None), "in_features", None)
             if in_features is None:
                 raise ValueError(
                     f"Could not determine in_features for backbone '{backbone}' when using precomputed embeddings."

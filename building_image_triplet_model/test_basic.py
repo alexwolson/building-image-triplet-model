@@ -5,12 +5,12 @@ import torch
 import yaml
 
 from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
+from building_image_triplet_model.model import GeoTripletNet
 from building_image_triplet_model.preprocessing import (
     ProcessingConfig,
     update_config_file as _update_config_file,
 )
 from building_image_triplet_model.preprocessing.processor import DatasetProcessor
-from building_image_triplet_model.model import GeoTripletNet
 from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 
 

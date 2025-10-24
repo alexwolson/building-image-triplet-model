@@ -4,12 +4,12 @@ import gc
 import logging
 from typing import List, Tuple
 
+from PIL import Image
 import numpy as np
 import pandas as pd
 import psutil
-import torch
-from PIL import Image
 from scipy.spatial import distance as sdist
+import torch
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
@@ -38,16 +38,14 @@ class EmbeddingComputer:
         self.logger.info(f"Finished embeddings for geo metric. Shape: {embeddings.shape}")
         return targets, embeddings
 
-    def precompute_backbone_embeddings(
-        self, h5_file, metadata_df: pd.DataFrame
-    ) -> None:
+    def precompute_backbone_embeddings(self, h5_file, metadata_df: pd.DataFrame) -> None:
         """Precompute backbone embeddings and store in HDF5."""
         self.logger.info("Precomputing backbone embeddings...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        
+
         # Import here to avoid circular imports
         from building_image_triplet_model.model import GeoTripletNet
-        
+
         model = GeoTripletNet(backbone=self.config.feature_model, pretrained=True).to(device)
         model.eval()
 

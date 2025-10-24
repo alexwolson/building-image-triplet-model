@@ -1,12 +1,12 @@
 """Image validation and processing utilities."""
 
 import logging
-import warnings
 from pathlib import Path
 from typing import Optional
+import warnings
 
-import numpy as np
 from PIL import Image
+import numpy as np
 
 
 class ImageValidator:
