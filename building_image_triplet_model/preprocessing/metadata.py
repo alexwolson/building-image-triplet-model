@@ -1,8 +1,8 @@
 """Metadata parsing, caching, and data splitting utilities."""
 
 import logging
-import pickle
 from pathlib import Path
+import pickle
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -31,7 +31,7 @@ class MetadataManager:
         return cache_dir / "metadata_cache_building.pkl"
 
     def _load_metadata_cache(self) -> Optional[pd.DataFrame]:
-        """Load metadata from cache if it exists."""
+        """Load metadata from cache if it exists and is valid for current input_dir."""
         cache_path = self._get_cache_path()
         if not cache_path.exists():
             self.logger.info("No completed metadata cache found")
@@ -42,6 +42,21 @@ class MetadataManager:
             with open(cache_path, "rb") as f:
                 cache_data = pickle.load(f)
 
+            # Validate cache against current configuration
+            cached_input_dir = cache_data.get("input_dir")
+            if cached_input_dir is None:
+                self.logger.warning(
+                    "Cache does not contain input_dir metadata. " "Invalidating cache for safety."
+                )
+                return None
+
+            if Path(cached_input_dir) != self.config.input_dir:
+                self.logger.warning(
+                    f"Cache input_dir ({cached_input_dir}) differs from current "
+                    f"({self.config.input_dir}). Invalidating cache."
+                )
+                return None
+
             metadata_df = cache_data["metadata"]
             self.logger.info(f"Successfully loaded metadata from cache: {len(metadata_df)} rows")
             return metadata_df
@@ -51,7 +66,7 @@ class MetadataManager:
             return None
 
     def _save_metadata_cache(self, metadata_df: pd.DataFrame) -> None:
-        """Save metadata to cache with two-stage approach."""
+        """Save metadata to cache with two-stage approach and configuration metadata."""
         temp_cache_path = self._get_temp_cache_path()
         final_cache_path = self._get_cache_path()
 
@@ -61,6 +76,7 @@ class MetadataManager:
             cache_data = {
                 "metadata": metadata_df,
                 "n_samples": self.config.n_samples,
+                "input_dir": str(self.config.input_dir),
             }
             with open(temp_cache_path, "wb") as f:
                 pickle.dump(cache_data, f)
@@ -91,7 +107,8 @@ class MetadataManager:
                 )
                 df = df[df["TargetID"].isin(sampled_tids)].reset_index(drop=True)
                 self.logger.info(
-                    f"Downsampled to {len(df)} rows across {len(sampled_tids)} TargetIDs (n_samples={self.config.n_samples})."
+                    f"Downsampled to {len(df)} rows across {len(sampled_tids)} "
+                    f"TargetIDs (n_samples={self.config.n_samples})."
                 )
 
         # Then apply image-based sampling if specified
@@ -102,31 +119,42 @@ class MetadataManager:
             sampled_indices = rng.choice(len(df), size=self.config.n_images, replace=False)
             df = df.iloc[sorted(sampled_indices)].reset_index(drop=True)
             self.logger.info(
-                f"Downsampled to {len(df)} images across {df['TargetID'].nunique()} TargetIDs (n_images={self.config.n_images})."
+                f"Downsampled to {len(df)} images across {df['TargetID'].nunique()} "
+                f"TargetIDs (n_images={self.config.n_images})."
             )
 
         return df
 
     def _parse_txt_file(self, txt_path: Path) -> Optional[Dict[str, Any]]:
-        """Parse a single .txt metadata file."""
+        """Parse a single .txt metadata file.
+
+        Returns None if the file cannot be parsed or if the paired image doesn't exist.
+        Logs debug information for files that fail to parse.
+        """
         try:
             with open(txt_path, "r") as f:
                 lines = [ln.strip() for ln in f.readlines() if ln.strip()]
             if not lines:
+                self.logger.debug(f"Skipping empty file: {txt_path}")
                 return None
             # Find the 'd' line using next() with default
             d_line = next((ln for ln in lines if ln.startswith("d")), None)
             if d_line is None:
+                self.logger.debug(f"No 'd' line found in: {txt_path}")
                 return None
             # Tokenize and drop the leading 'd'
             parts = d_line.split()
             if (
                 len(parts) < 4 + 3 + 3 + 3 + 4
             ):  # ids + target(3) + normal(3) + street(3) + 4 scalars
+                self.logger.debug(
+                    f"Insufficient fields in 'd' line ({len(parts)} parts): {txt_path}"
+                )
                 return None
             _, ds_id_str, tgt_id_str, patch_id_str, sv_id_str, *rest = parts
             # Extract target point (lat, lon, height)
             if len(rest) < 3:
+                self.logger.debug(f"Insufficient coordinate data in: {txt_path}")
                 return None
             target_lat = float(rest[0])
             target_lon = float(rest[1])
@@ -140,6 +168,7 @@ class MetadataManager:
                     break
             if image_filename is None:
                 # No paired image; skip
+                self.logger.debug(f"No paired image found for: {txt_path}")
                 return None
             return {
                 "DatasetID": int(ds_id_str),
@@ -151,7 +180,8 @@ class MetadataManager:
                 "Target Point Latitude": target_lat,
                 "Target Point Longitude": target_lon,
             }
-        except Exception:
+        except Exception as e:
+            self.logger.debug(f"Error parsing {txt_path}: {e}")
             return None
 
     def read_metadata(self) -> pd.DataFrame:
