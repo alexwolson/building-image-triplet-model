@@ -24,7 +24,6 @@ class GeoTripletDataModule(LightningDataModule):
         num_difficulty_levels: int = 10,
         ucb_alpha: float = 2.0,
         cache_size: int = 1000,
-        difficulty_metric: str = "geo",
         use_precomputed_embeddings: bool = False,
         store_raw_images: bool = True,
     ):
@@ -35,7 +34,6 @@ class GeoTripletDataModule(LightningDataModule):
         self.num_difficulty_levels: int = num_difficulty_levels
         self.cache_size: int = cache_size
         self.ucb_alpha: float = ucb_alpha
-        self.difficulty_metric: str = difficulty_metric
         self.use_precomputed_embeddings: bool = use_precomputed_embeddings
         self.store_raw_images: bool = store_raw_images
         self.train_dataset = None  # type: Optional[GeoTripletDataset]
@@ -64,7 +62,6 @@ class GeoTripletDataModule(LightningDataModule):
             self.train_dataset = GeoTripletDataset(
                 hdf5_path=self.hdf5_path,
                 split="train",
-                difficulty_metric=self.difficulty_metric,
                 num_difficulty_levels=self.num_difficulty_levels,
                 cache_size=self.cache_size,
                 transform=self.train_transform,
@@ -75,7 +72,6 @@ class GeoTripletDataModule(LightningDataModule):
             self.val_dataset = GeoTripletDataset(
                 hdf5_path=self.hdf5_path,
                 split="val",
-                difficulty_metric=self.difficulty_metric,
                 num_difficulty_levels=self.num_difficulty_levels,
                 cache_size=self.cache_size,
                 transform=self.val_transform,

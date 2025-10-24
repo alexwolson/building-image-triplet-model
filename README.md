@@ -38,11 +38,8 @@ data:
   cache_size: 1000
   
   # Model configuration
-  cnn_feature_model: mobilenetv3_small_075
-  cnn_image_size: 128
   feature_model: vit_pe_spatial_base_patch16_512.fb
   image_size: 512
-  difficulty_metric: geo
   precompute_backbone_embeddings: false  # Set to true to precompute backbone embeddings
   use_precomputed_embeddings: false  # Set to true to use precomputed embeddings from HDF5
   store_raw_images: true  # Whether to store raw images in the HDF5 file
@@ -136,7 +133,7 @@ python -m building_image_triplet_model.dataset_processor --config config.yaml
 This will:
 - Parse metadata from `.txt` files in the input directory
 - Process and resize images
-- Compute embeddings using the specified feature model
+- Compute geographical coordinate embeddings and distance matrices
 - Save everything to an HDF5 file for efficient training
 
 ### Running Tests

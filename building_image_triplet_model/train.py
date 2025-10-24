@@ -62,7 +62,6 @@ def create_model_and_datamodule(
     )
     ucb_alpha = overrides.get("ucb_alpha", config["data"].get("ucb_alpha", 2.0))
     cache_size = config["data"].get("cache_size", 1000)
-    difficulty_metric = config["data"].get("difficulty_metric", "geo")
     # Model
     embedding_size = overrides.get("embedding_size", config["model"].get("embedding_size", 128))
     margin = overrides.get("margin", config["model"].get("margin", 1.0))
@@ -85,7 +84,6 @@ def create_model_and_datamodule(
         num_difficulty_levels=num_difficulty_levels,
         ucb_alpha=ucb_alpha,
         cache_size=cache_size,
-        difficulty_metric=difficulty_metric,
         use_precomputed_embeddings=use_precomputed_embeddings,
         store_raw_images=store_raw_images,
     )

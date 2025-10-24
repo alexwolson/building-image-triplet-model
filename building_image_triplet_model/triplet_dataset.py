@@ -48,7 +48,6 @@ class GeoTripletDataset(Dataset):
         self,
         hdf5_path: str,
         split: str = "train",
-        difficulty_metric: str = "geo",
         num_difficulty_levels: int = 5,
         ucb_alpha: float = 2.0,
         cache_size: int = 1000,
@@ -65,7 +64,6 @@ class GeoTripletDataset(Dataset):
             raise RuntimeError(f"Failed to open HDF5 file: {self.hdf5_path}")
         self.transform = transform
         self.split = split
-        self.difficulty_metric = difficulty_metric
         self.cache_size = cache_size
         self.cache: Dict[int, np.ndarray] = {}
         self.tensor_cache: "OrderedDict[int, torch.Tensor]" = OrderedDict()
@@ -98,9 +96,9 @@ class GeoTripletDataset(Dataset):
             target_order_key = f"target_id_order_{split}"
             self.target_id_order = np.array(self.h5_file["metadata"][target_order_key][:])
 
-            # Load KNN datasets (indices and distances) – dense matrix is no longer used
-            knn_idx_key = f"knn_indices_{difficulty_metric}_{split}"
-            knn_dist_key = f"knn_distances_{difficulty_metric}_{split}"
+            # Load KNN datasets (indices and distances) for geo metric
+            knn_idx_key = f"knn_indices_geo_{split}"
+            knn_dist_key = f"knn_distances_geo_{split}"
             if knn_idx_key not in self.h5_file["metadata"]:
                 raise KeyError(
                     f"KNN datasets '{knn_idx_key}' not found in HDF5. Please regenerate with new processor."

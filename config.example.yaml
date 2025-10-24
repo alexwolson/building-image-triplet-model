@@ -22,11 +22,8 @@ data:
   cache_size: 1000
   
   # Model configuration
-  cnn_feature_model: mobilenetv3_small_075
-  cnn_image_size: 128
   feature_model: vit_pe_spatial_base_patch16_512.fb
   image_size: 512
-  difficulty_metric: geo
   precompute_backbone_embeddings: false  # Set to true to precompute backbone embeddings
   use_precomputed_embeddings: false  # Set to true to use precomputed embeddings from HDF5
   store_raw_images: true  # Whether to store raw images in the HDF5 file
