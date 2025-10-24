@@ -4,12 +4,10 @@ import logging
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image
 import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from torchvision.transforms.functional import to_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +50,6 @@ class GeoTripletDataset(Dataset):
         ucb_alpha: float = 2.0,
         cache_size: int = 1000,
         transform: Optional[Any] = None,
-        use_precomputed_embeddings: bool = False,
-        store_raw_images: bool = True,
         difficulty_update_window: int = 32,
     ):
         logger.info(f"Initializing GeoTripletDataset for split='{split}'...")
@@ -73,21 +69,14 @@ class GeoTripletDataset(Dataset):
         self.ucb_alpha = ucb_alpha
         self.difficulty_update_window = difficulty_update_window
 
-        self.use_precomputed_embeddings = use_precomputed_embeddings
-        self.store_raw_images = store_raw_images
-
-        if self.use_precomputed_embeddings:
-            if "backbone_embeddings" not in self.h5_file:
-                raise ValueError(
-                    f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}"
-                )
-            self.embeddings_dataset = self.h5_file["backbone_embeddings"]
-            logger.info("Using precomputed backbone embeddings.")
-        elif self.store_raw_images:
-            self.embeddings_dataset = self.h5_file["images"]["data"]
-            logger.info("Using raw images.")
-        else:
-            raise ValueError("Either use_precomputed_embeddings or store_raw_images must be True.")
+        # Always use precomputed embeddings
+        if "backbone_embeddings" not in self.h5_file:
+            raise ValueError(
+                f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}"
+            )
+        self.embeddings_dataset = self.h5_file["backbone_embeddings"]
+        logger.info("Using precomputed backbone embeddings.")
+        
         # Load split-specific matrices and metadata
         if self.h5_file is None:
             raise RuntimeError("HDF5 file must be open before loading metadata.")
@@ -259,7 +248,7 @@ class GeoTripletDataset(Dataset):
         return neg_local_index
 
     def _get_data(self, local_idx: int) -> np.ndarray:
-        """Retrieve raw uint8 image array or precomputed embedding given local index."""
+        """Retrieve precomputed embedding given local index."""
         global_idx = self.valid_indices[local_idx]
         if global_idx in self.cache:
             return self.cache[global_idx]
@@ -277,26 +266,12 @@ class GeoTripletDataset(Dataset):
         return data
 
     def _get_tensor(self, local_idx: int) -> torch.Tensor:
-        """Load image/embedding, apply transforms if image, return CHW float tensor, with caching."""
+        """Load embedding, return float tensor, with caching."""
         if local_idx in self.tensor_cache:
             return self.tensor_cache[local_idx]
 
         data = self._get_data(local_idx)
-
-        if self.use_precomputed_embeddings:
-            tensor = torch.from_numpy(data).float()
-        else:
-            try:
-                img_pil = Image.fromarray(data)
-            except Exception as e:
-                logger.error(f"Failed to convert image to PIL: {e}")
-                raise
-            if self.transform:
-                img_pil = self.transform(img_pil)
-            if isinstance(img_pil, torch.Tensor):
-                tensor = img_pil
-            else:
-                tensor = to_tensor(img_pil)
+        tensor = torch.from_numpy(data).float()
 
         if len(self.tensor_cache) >= self.cache_size:
             self.tensor_cache.pop(next(iter(self.tensor_cache)))
