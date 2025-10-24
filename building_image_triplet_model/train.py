@@ -41,8 +41,16 @@ console = Console()
 
 
 def load_config(config_path: str | Path) -> dict:
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+    try:
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Configuration file not found: {config_path}. "
+            "Please ensure the file exists and the path is correct."
+        )
+    except yaml.YAMLError as e:
+        raise ValueError(f"Error parsing YAML configuration file: {e}")
 
 
 def create_model_and_datamodule(
