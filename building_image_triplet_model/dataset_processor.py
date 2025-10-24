@@ -44,15 +44,11 @@ class ProcessingConfig:
     test_size: float = 0.15
     image_size: int = 224
     num_workers: int = 4
-    difficulty_metric: str = "geo"  # 'geo' or 'cnn'
     feature_model: str = "resnet18"  # used for backbone / training
     chunk_size: Tuple[int, int, int, int] = (1, 224, 224, 3)
     knn_k: int = 512  # number of nearest neighbours to store per target
     precompute_backbone_embeddings: bool = False  # whether to precompute backbone embeddings
     store_raw_images: bool = True  # whether to store raw images in the HDF5 file
-    cnn_batch_size: int = 32  # batch size for CNN embedding computation
-    cnn_feature_model: str = "resnet18"  # smaller model for CNN similarity computation
-    cnn_image_size: int = 224  # input size for cnn_feature_model
 
     def __post_init__(self) -> None:
         if self.val_size + self.test_size >= 1.0:
@@ -356,13 +352,12 @@ class DatasetProcessor:
         h5_file: h5py.File,
         split_target_ids: np.ndarray,
         split_name: str,
-        metric: str,
         all_targets: np.ndarray,
         embeddings_all: np.ndarray,
     ) -> None:
         """Slice cached embeddings for the split and store distance matrix."""
         self.logger.info(
-            f"Computing distance matrix for split='{split_name}', metric='{metric}', "
+            f"Computing distance matrix for split='{split_name}', "
             f"|targets|={len(split_target_ids)}"
         )
         # Ensure target order matches cached embeddings order
@@ -381,7 +376,7 @@ class DatasetProcessor:
         process = psutil.Process()
         k = self.config.knn_k
         idx_ds = meta_grp.create_dataset(  # type: ignore
-            f"knn_indices_{metric}_{split_name}",
+            f"knn_indices_geo_{split_name}",
             shape=(n, k),
             dtype="int32",
             chunks=(min(1024, n), k),
@@ -389,7 +384,7 @@ class DatasetProcessor:
             compression_opts=4,
         )
         dist_ds = meta_grp.create_dataset(  # type: ignore
-            f"knn_distances_{metric}_{split_name}",
+            f"knn_distances_geo_{split_name}",
             shape=(n, k),
             dtype="float16",
             chunks=(min(1024, n), k),
@@ -414,8 +409,8 @@ class DatasetProcessor:
                 )
                 continue  # retry with smaller chunk
 
-            if metric == "geo":
-                block = np.log1p(block, dtype=np.float32)
+            # Apply log transformation for geo distance
+            block = np.log1p(block, dtype=np.float32)
 
             # For each row in block, select k nearest neighbours (excluding self)
             for row_idx, row in enumerate(block):
@@ -433,109 +428,23 @@ class DatasetProcessor:
                 self.logger.info(f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}")
 
             start = end
-        self.logger.info(f"{split_name}: stored {metric} matrix of shape {n}×{n}.")
+        self.logger.info(f"{split_name}: stored geo distance matrix of shape {n}×{n}.")
 
     # ---------------------------------------------------------------------
-    # Embedding computation (once per metric)
+    # Embedding computation for geo metric
     # ---------------------------------------------------------------------
 
-    def _compute_embeddings_for_metric(
-        self, df: pd.DataFrame, metric: str
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Return (sorted_target_ids, embeddings) for the given metric."""
-        self.logger.info(f"Computing embeddings for metric='{metric}' ...")
+    def _compute_geo_embeddings(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        """Return (sorted_target_ids, embeddings) for geo metric."""
+        self.logger.info("Computing embeddings for geo metric...")
         targets = np.sort(np.asarray(df["TargetID"].unique(), dtype=np.int64))
-        if metric == "geo":
-            embeddings = (
-                df.groupby("TargetID")[["Target Point Latitude", "Target Point Longitude"]]
-                .first()
-                .loc[targets]
-                .values.astype(np.float32)
-            )
-        elif metric == "cnn":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            model = (
-                timm.create_model(self.config.cnn_feature_model, pretrained=True, num_classes=0)
-                .eval()
-                .to(device)
-            )
-            prep = transforms.Compose(
-                [
-                    transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
-                    transforms.Resize((self.config.cnn_image_size, self.config.cnn_image_size)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                ]
-            )
-
-            # Get the actual feature size from the model
-            # Create a dummy input to determine feature size
-            dummy_input = torch.randn(
-                1, 3, self.config.cnn_image_size, self.config.cnn_image_size
-            ).to(device)
-            with torch.no_grad():
-                dummy_output = model(dummy_input)
-                feature_size = dummy_output.shape[1]
-
-            # Process each target individually to avoid memory accumulation
-            embeddings = np.zeros((len(targets), feature_size), dtype=np.float32)
-
-            for target_idx, target_id in enumerate(tqdm(targets, desc="CNN feats (targets)")):
-                # Get all images for this target
-                target_rows = df[df["TargetID"] == target_id]
-                target_features = []
-
-                # Process images for this target in batches
-                batch_imgs: List[torch.Tensor] = []
-                for _, row in target_rows.iterrows():
-                    img_path = self._build_image_path(row)
-                    try:
-                        with Image.open(img_path) as im:
-                            tensor_img = prep(im.convert("RGB"))
-                            if isinstance(tensor_img, torch.Tensor):
-                                batch_imgs.append(tensor_img)
-                    except Exception as e:
-                        self.logger.warning(f"Skipping image {img_path}: {e}")
-                        continue
-
-                    if len(batch_imgs) == self.config.cnn_batch_size:
-                        with torch.no_grad():
-                            out = model(torch.stack(batch_imgs).to(device)).cpu().numpy()
-                        target_features.extend(out.astype(np.float32))
-                        batch_imgs = []
-                        # Clear GPU cache after each batch
-                        if device == "cuda":
-                            torch.cuda.empty_cache()
-
-                # Process remaining images for this target
-                if batch_imgs:
-                    with torch.no_grad():
-                        out = model(torch.stack(batch_imgs).to(device)).cpu().numpy()
-                    target_features.extend(out.astype(np.float32))
-                    if device == "cuda":
-                        torch.cuda.empty_cache()
-
-                # Compute mean embedding for this target
-                if target_features:
-                    embeddings[target_idx] = np.mean(target_features, axis=0)
-                else:
-                    # If no valid images, use zero vector
-                    embeddings[target_idx] = np.zeros(feature_size, dtype=np.float32)
-
-                # Clear target features from memory
-                del target_features
-                gc.collect()
-
-                # Log memory usage every 100 targets
-                if target_idx % 100 == 0 and device == "cuda":
-                    mem_allocated = torch.cuda.memory_allocated() / 1024**3
-                    mem_reserved = torch.cuda.memory_reserved() / 1024**3
-                    self.logger.info(
-                        f"Target {target_idx}/{len(targets)}: GPU memory - {mem_allocated:.2f}GB allocated, {mem_reserved:.2f}GB reserved"
-                    )
-        else:
-            raise ValueError(f"Unknown metric {metric}")
-        self.logger.info(f"Finished embeddings for metric='{metric}'. Shape: {embeddings.shape}")
+        embeddings = (
+            df.groupby("TargetID")[["Target Point Latitude", "Target Point Longitude"]]
+            .first()
+            .loc[targets]
+            .values.astype(np.float32)
+        )
+        self.logger.info(f"Finished embeddings for geo metric. Shape: {embeddings.shape}")
         return targets, embeddings
 
     def _precompute_backbone_embeddings(
@@ -645,11 +554,9 @@ class DatasetProcessor:
                         compression="lzf",
                     )
             # ------------------------------------------------------------------
-            # 1. Compute embeddings once per metric for ALL targets
+            # 1. Compute geo embeddings for ALL targets
             # ------------------------------------------------------------------
-            embeddings_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
-            for metric in ["geo", "cnn"]:
-                embeddings_cache[metric] = self._compute_embeddings_for_metric(metadata_df, metric)
+            all_targets, geo_embeddings = self._compute_geo_embeddings(metadata_df)
 
             if self.config.precompute_backbone_embeddings:
                 self._precompute_backbone_embeddings(h5_file, metadata_df)
@@ -657,35 +564,30 @@ class DatasetProcessor:
             # ------------------------------------------------------------------
             # 2. For each split, slice embeddings and write distance matrices
             # ------------------------------------------------------------------
-            for metric in ["geo", "cnn"]:
-                all_tgts, embeds = embeddings_cache[metric]
-                self._compute_and_store_difficulty_scores_for_split(
-                    h5_file,
-                    splits["train"],
-                    "train",
-                    metric,
-                    all_tgts,
-                    embeds,
-                )
-                gc.collect()
-                self._compute_and_store_difficulty_scores_for_split(
-                    h5_file,
-                    splits["val"],
-                    "val",
-                    metric,
-                    all_tgts,
-                    embeds,
-                )
-                gc.collect()
-                self._compute_and_store_difficulty_scores_for_split(
-                    h5_file,
-                    splits["test"],
-                    "test",
-                    metric,
-                    all_tgts,
-                    embeds,
-                )
-                gc.collect()
+            self._compute_and_store_difficulty_scores_for_split(
+                h5_file,
+                splits["train"],
+                "train",
+                all_targets,
+                geo_embeddings,
+            )
+            gc.collect()
+            self._compute_and_store_difficulty_scores_for_split(
+                h5_file,
+                splits["val"],
+                "val",
+                all_targets,
+                geo_embeddings,
+            )
+            gc.collect()
+            self._compute_and_store_difficulty_scores_for_split(
+                h5_file,
+                splits["test"],
+                "test",
+                all_targets,
+                geo_embeddings,
+            )
+            gc.collect()
             current_idx = 0  # Global row counter in metadata_df order
             valid_indices: List[int] = []
             if self.config.store_raw_images:
@@ -768,7 +670,6 @@ def _load_processing_config(config_path: Path) -> ProcessingConfig:
     # Get processing parameters
     batch_size = data_cfg.get("batch_size", 100)
     num_workers = data_cfg.get("num_workers", 4)
-    difficulty_metric = data_cfg.get("difficulty_metric", "geo")
     feature_model = data_cfg.get("feature_model", "resnet18")
     store_raw_images = data_cfg.get("store_raw_images", True)
     precompute_backbone_embeddings = data_cfg.get("precompute_backbone_embeddings", False)
@@ -778,13 +679,6 @@ def _load_processing_config(config_path: Path) -> ProcessingConfig:
     if image_size is None:
         image_size = _infer_image_size_from_model(feature_model, console)
 
-    cnn_feature_model = data_cfg.get("cnn_feature_model", "resnet18")
-    cnn_image_size = data_cfg.get("cnn_image_size")
-    if cnn_image_size is None:
-        cnn_image_size = _infer_image_size_from_model(cnn_feature_model, console)
-
-    cnn_batch_size = data_cfg.get("cnn_batch_size", 32)
-
     return ProcessingConfig(
         input_dir=input_dir,
         output_file=output_file,
@@ -793,12 +687,8 @@ def _load_processing_config(config_path: Path) -> ProcessingConfig:
         batch_size=batch_size,
         num_workers=num_workers,
         image_size=image_size,
-        difficulty_metric=difficulty_metric,
         feature_model=feature_model,
         store_raw_images=store_raw_images,
-        cnn_batch_size=cnn_batch_size,
-        cnn_feature_model=cnn_feature_model,
-        cnn_image_size=cnn_image_size,
         precompute_backbone_embeddings=precompute_backbone_embeddings,
     )
 
@@ -814,8 +704,6 @@ def _update_config_file(config_path: Path, config: ProcessingConfig) -> None:
     config_dict.setdefault("data", {})
     config_dict["data"]["hdf5_path"] = str(config.output_file)
     config_dict["data"]["image_size"] = config.image_size
-    config_dict["data"]["cnn_feature_model"] = config.cnn_feature_model
-    config_dict["data"]["cnn_image_size"] = config.cnn_image_size
 
     # If backbone embeddings were precomputed, read the backbone output size from HDF5
     if config.precompute_backbone_embeddings:
