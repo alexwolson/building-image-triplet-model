@@ -77,7 +77,9 @@ class GeoTripletDataset(Dataset):
 
         if self.use_precomputed_embeddings:
             if "backbone_embeddings" not in self.h5_file:
-                raise ValueError(f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}")
+                raise ValueError(
+                    f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}"
+                )
             self.embeddings_dataset = self.h5_file["backbone_embeddings"]
             logger.info("Using precomputed backbone embeddings.")
         elif self.store_raw_images:
@@ -88,7 +90,7 @@ class GeoTripletDataset(Dataset):
         # Load split-specific matrices and metadata
         if self.h5_file is None:
             raise RuntimeError("HDF5 file must be open before loading metadata.")
-        
+
         try:
             target_order_key = f"target_id_order_{split}"
             self.target_id_order = np.array(self.h5_file["metadata"][target_order_key][:])
@@ -129,7 +131,7 @@ class GeoTripletDataset(Dataset):
         try:
             if self.h5_file is None or not self.h5_file.id.valid:
                 self.h5_file = h5py.File(self.hdf5_path, "r")
-        except (AttributeError, ValueError) as e:
+        except (AttributeError, ValueError):
             # Handle case where h5_file doesn't have id attribute or is invalid
             self.h5_file = h5py.File(self.hdf5_path, "r")
         except Exception as e:
@@ -171,7 +173,9 @@ class GeoTripletDataset(Dataset):
         ]
         logger.info(
             "Difficulty bands (quantiles): "
-            + ", ".join(f"[{lo:.4f}, {hi:.4f}]" for lo, hi in zip(bounds[:-1], bounds[1:], strict=True))
+            + ", ".join(
+                f"[{lo:.4f}, {hi:.4f}]" for lo, hi in zip(bounds[:-1], bounds[1:], strict=True)
+            )
         )
         return levels
 
@@ -268,7 +272,7 @@ class GeoTripletDataset(Dataset):
         """Load image/embedding, apply transforms if image, return CHW float tensor, with caching."""
         if local_idx in self.tensor_cache:
             return self.tensor_cache[local_idx]
-        
+
         data = self._get_data(local_idx)
 
         if self.use_precomputed_embeddings:
