@@ -46,7 +46,7 @@ class GeoTripletNet(LightningModule):
                 will be automatically determined from the backbone model.
         """
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters()  # Saves all __init__ parameters to self.hparams
 
         # Always use precomputed embeddings - no backbone needed
         # Determine the backbone output size for the projection head
