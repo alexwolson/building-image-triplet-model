@@ -1,14 +1,11 @@
-from .datamodule import GeoTripletDataModule
-from .model import GeoTripletNet
-import numpy as np
+from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa: F401
+from building_image_triplet_model.dataset_processor import DatasetProcessor, ProcessingConfig
+from building_image_triplet_model.model import GeoTripletNet
+from building_image_triplet_model.triplet_dataset import GeoTripletDataset
+import pandas as pd
 import pytest
 from pytorch_lightning import Trainer
 import torch
-from .triplet_dataset import GeoTripletDataset
-from .dataset_processor import DatasetProcessor, ProcessingConfig
-from pathlib import Path
-import tempfile
-import pandas as pd
 
 
 class DummyDataset(torch.utils.data.Dataset):
@@ -44,12 +41,11 @@ def test_dummy_training_step():
 
 
 def test_dataset_loading(tmp_path):
+    """Test that GeoTripletDataset fails gracefully without a valid HDF5 file."""
     # This is a placeholder: in real tests, use a small HDF5 file or mock
-    # For now, just check that the class can be instantiated
-    try:
-        ds = GeoTripletDataset(hdf5_path="dummy.h5", split="train")
-    except Exception:
-        pass  # Expected to fail without a real file
+    # For now, just check that the class raises an exception without a real file
+    with pytest.raises(Exception):
+        GeoTripletDataset(hdf5_path="dummy.h5", split="train")
 
 
 def test_metadata_cache_functionality(tmp_path):
@@ -57,58 +53,60 @@ def test_metadata_cache_functionality(tmp_path):
     # Create a temporary directory with some mock .txt files
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    
+
     # Create a subdirectory structure
     subdir = input_dir / "0001" / "0001"
     subdir.mkdir(parents=True)
-    
+
     # Create a mock .txt file
     # The 'd' line format is as follows:
     # d DatasetID TargetID PatchID StreetViewID Target Point (lat, lon, h) Surface Normal (3) Street View Location (lat, lon, h) Distance Heading Pitch Roll
     txt_file = subdir / "test.txt"
     txt_content = """d 1 1 1 1 40.7128 -74.0060 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0"""
     txt_file.write_text(txt_content)
-    
+
     # Create a mock .jpg file
     jpg_file = subdir / "test.jpg"
     jpg_file.write_bytes(b"fake image data")
-    
+
     # Create config
     config = ProcessingConfig(
         input_dir=input_dir,
         output_file=tmp_path / "output.h5",
         n_samples=None,
         batch_size=10,
-        image_size=224
+        image_size=224,
     )
-    
+
     # Create processor
     processor = DatasetProcessor(config)
-    
+
     # Test cache path generation
     cache_path = processor._get_cache_path()
     assert cache_path.name == "metadata_cache_complete.pkl"
-    
+
     temp_cache_path = processor._get_temp_cache_path()
     assert temp_cache_path.name == "metadata_cache_building.pkl"
-    
+
     # Test cache save/load with mock data
-    mock_df = pd.DataFrame({
-        "DatasetID": [1],
-        "TargetID": [1],
-        "PatchID": [1],
-        "StreetViewID": [1],
-        "Image filename": ["test.jpg"],
-        "Subpath": ["0001/0001"],
-        "Target Point Latitude": [40.7128],
-        "Target Point Longitude": [-74.0060],
-    })
-    
+    mock_df = pd.DataFrame(
+        {
+            "DatasetID": [1],
+            "TargetID": [1],
+            "PatchID": [1],
+            "StreetViewID": [1],
+            "Image filename": ["test.jpg"],
+            "Subpath": ["0001/0001"],
+            "Target Point Latitude": [40.7128],
+            "Target Point Longitude": [-74.0060],
+        }
+    )
+
     # Save cache
     processor._save_metadata_cache(mock_df)
     assert cache_path.exists()
     assert not temp_cache_path.exists()  # Should be moved to final location
-    
+
     # Load cache
     loaded_df = processor._load_metadata_cache()
     assert loaded_df is not None

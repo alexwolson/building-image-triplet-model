@@ -20,8 +20,6 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from .datamodule import GeoTripletDataModule
-from .model import GeoTripletNet
 import optuna
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import (
@@ -36,6 +34,9 @@ import torch
 import wandb
 import yaml
 
+from .datamodule import GeoTripletDataModule
+from .model import GeoTripletNet
+
 console = Console()
 
 
@@ -44,7 +45,12 @@ def load_config(config_path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
-def create_model_and_datamodule(config: dict, overrides: Optional[dict] = None, use_precomputed_embeddings: bool = False, store_raw_images: bool = True):
+def create_model_and_datamodule(
+    config: dict,
+    overrides: Optional[dict] = None,
+    use_precomputed_embeddings: bool = False,
+    store_raw_images: bool = True,
+):
     """Create model and datamodule, optionally overriding config values (e.g., for Optuna)."""
     overrides = overrides or {}
     # Data
@@ -176,7 +182,6 @@ def main():
         optuna_config = config.get("optuna", {})
         if not optuna_config.get("storage") or not optuna_config.get("study_name"):
             raise ValueError("Optuna mode requires storage and study_name in config")
-        import optuna
 
         console.print(f"[green]Connecting to Optuna storage:[/green] {optuna_config['storage']}")
         study = optuna.create_study(
@@ -223,7 +228,11 @@ def main():
         # Read all settings from config
         use_precomputed_embeddings = config["data"].get("use_precomputed_embeddings", False)
         store_raw_images = config["data"].get("store_raw_images", True)
-        model, data_module = create_model_and_datamodule(config, use_precomputed_embeddings=use_precomputed_embeddings, store_raw_images=store_raw_images)
+        model, data_module = create_model_and_datamodule(
+            config,
+            use_precomputed_embeddings=use_precomputed_embeddings,
+            store_raw_images=store_raw_images,
+        )
         trainer = Trainer(
             max_epochs=config["train"]["max_epochs"],
             limit_train_batches=steps_per_epoch,

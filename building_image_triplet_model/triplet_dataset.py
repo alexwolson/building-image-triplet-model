@@ -1,4 +1,4 @@
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 import logging
 import math
@@ -77,7 +77,9 @@ class GeoTripletDataset(Dataset):
 
         if self.use_precomputed_embeddings:
             if "backbone_embeddings" not in self.h5_file:
-                raise ValueError(f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}")
+                raise ValueError(
+                    f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}"
+                )
             self.embeddings_dataset = self.h5_file["backbone_embeddings"]
             logger.info("Using precomputed backbone embeddings.")
         elif self.store_raw_images:
@@ -86,7 +88,9 @@ class GeoTripletDataset(Dataset):
         else:
             raise ValueError("Either use_precomputed_embeddings or store_raw_images must be True.")
         # Load split-specific matrices and metadata
-        assert self.h5_file is not None, "HDF5 file must be open."
+        if self.h5_file is None:
+            raise RuntimeError("HDF5 file must be open before loading metadata.")
+
         try:
             target_order_key = f"target_id_order_{split}"
             self.target_id_order = np.array(self.h5_file["metadata"][target_order_key][:])
@@ -108,7 +112,6 @@ class GeoTripletDataset(Dataset):
             f"Loaded KNN distance tables '{knn_idx_key}/{knn_dist_key}' for split='{split}'."
         )
         self.tid_to_row = {tid: i for i, tid in enumerate(self.target_id_order)}
-        assert self.h5_file is not None, "HDF5 file must be open."
         split_targets = set(np.array(self.h5_file["splits"][split][:]))
         all_valid_indices = np.array(self.h5_file["images"]["valid_indices"][:])
         all_target_ids = np.array(self.h5_file["metadata"]["TargetID"][:])
@@ -124,15 +127,13 @@ class GeoTripletDataset(Dataset):
         )
 
     def _open_h5(self) -> None:
-        """Open the HDF5 file, with error handling (robust to truth-value check)."""
+        """Open the HDF5 file, with error handling."""
         try:
-            # Using bool() on an h5py.File raises ValueError, so rely on its id.valid flag.
-            if (
-                self.h5_file is None
-                or not hasattr(self.h5_file, "id")
-                or not self.h5_file.id.valid
-            ):
+            if self.h5_file is None or not self.h5_file.id.valid:
                 self.h5_file = h5py.File(self.hdf5_path, "r")
+        except (AttributeError, ValueError):
+            # Handle case where h5_file doesn't have id attribute or is invalid
+            self.h5_file = h5py.File(self.hdf5_path, "r")
         except Exception as e:
             logger.error(f"Failed to open HDF5 file: {e}")
             raise
@@ -148,17 +149,16 @@ class GeoTripletDataset(Dataset):
 
     def _create_target_mapping(self) -> Dict[Any, List[int]]:
         """Map each target_id -> list of local indices in this dataset's subset."""
-        mapping: Dict[Any, List[int]] = {}
+        mapping: Dict[Any, List[int]] = defaultdict(list)
         for local_idx, target_id in enumerate(self.target_ids):
-            mapping.setdefault(target_id, []).append(local_idx)
-        return mapping
+            mapping[target_id].append(local_idx)
+        return dict(mapping)
 
     def _init_difficulty_levels(self, num_levels: int) -> List[TripletDifficulty]:
         """Build difficulty bands using quantiles of the distance matrix."""
         # Flatten KNN distances to approximate global distribution (ignore inf)
         all_dists = self.knn_distances[:].astype(np.float32).flatten()
         sample_values = all_dists[np.isfinite(all_dists)]
-        n = len(self.target_id_order)
         bounds = np.quantile(sample_values, np.linspace(0.0, 1.0, num_levels + 1)).astype(
             np.float32
         )
@@ -169,26 +169,25 @@ class GeoTripletDataset(Dataset):
                 success_rate=0.5,
                 num_attempts=0,
             )
-            for lo, hi in zip(bounds[:-1], bounds[1:])
+            for lo, hi in zip(bounds[:-1], bounds[1:], strict=True)
         ]
         logger.info(
             "Difficulty bands (quantiles): "
-            + ", ".join(f"[{lo:.4f}, {hi:.4f}]" for lo, hi in zip(bounds[:-1], bounds[1:]))
+            + ", ".join(
+                f"[{lo:.4f}, {hi:.4f}]" for lo, hi in zip(bounds[:-1], bounds[1:], strict=True)
+            )
         )
         return levels
 
     def _select_difficulty_level(self) -> TripletDifficulty:
         """Select a difficulty level using UCB balancing exploration and exploitation."""
         total_attempts = sum(max(1, lvl.num_attempts) for lvl in self.difficulty_levels)
-        scores = []
-        for lvl in self.difficulty_levels:
-            exploitation = 1.0 - lvl.success_rate
-            exploration = math.sqrt(
-                self.ucb_alpha * math.log(total_attempts) / max(1, lvl.num_attempts)
-            )
-            scores.append(exploitation + exploration)
-        idx = int(np.argmax(scores))
-        return self.difficulty_levels[idx]
+        scores = [
+            (1.0 - lvl.success_rate)
+            + math.sqrt(self.ucb_alpha * math.log(total_attempts) / max(1, lvl.num_attempts))
+            for lvl in self.difficulty_levels
+        ]
+        return self.difficulty_levels[np.argmax(scores)]
 
     def _get_distance_row(self, anchor_row: int) -> np.ndarray:
         """Return a synthetic full-distance row using KNN distances; non-stored entries are +inf."""
@@ -256,7 +255,8 @@ class GeoTripletDataset(Dataset):
         global_idx = self.valid_indices[local_idx]
         if global_idx in self.cache:
             return self.cache[global_idx]
-        assert self.h5_file is not None, "HDF5 file must be open."
+        if self.h5_file is None:
+            raise RuntimeError("HDF5 file must be open to access data.")
         try:
             data = self.embeddings_dataset[global_idx]  # type: ignore
             data = np.array(data)
@@ -272,7 +272,7 @@ class GeoTripletDataset(Dataset):
         """Load image/embedding, apply transforms if image, return CHW float tensor, with caching."""
         if local_idx in self.tensor_cache:
             return self.tensor_cache[local_idx]
-        
+
         data = self._get_data(local_idx)
 
         if self.use_precomputed_embeddings:
@@ -341,7 +341,9 @@ class GeoTripletDataset(Dataset):
                 logger.warning(f"Exception while closing HDF5 file: {e}")
 
     def __del__(self):
+        """Cleanup when the dataset is destroyed."""
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Ignore errors during cleanup to avoid issues during interpreter shutdown
+            logger.debug(f"Error during dataset cleanup: {e}")

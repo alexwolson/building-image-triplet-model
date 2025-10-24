@@ -7,6 +7,7 @@ from typing import Optional
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
+
 from .triplet_dataset import GeoTripletDataset
 
 
@@ -30,7 +31,7 @@ class GeoTripletDataModule(LightningDataModule):
         super().__init__()
         self.hdf5_path: str = hdf5_path
         self.batch_size: int = batch_size
-        self.num_workers: int = num_workers if num_workers is not None else 4
+        self.num_workers: int = num_workers
         self.num_difficulty_levels: int = num_difficulty_levels
         self.cache_size: int = cache_size
         self.ucb_alpha: float = ucb_alpha

@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
 
 import argparse
-from concurrent.futures import Executor as BaseExecutor
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 import gc
-from itertools import islice
+from itertools import batched
 import logging
 from pathlib import Path
-import sys
-from typing import Any, Dict, Iterator, List, Optional, Tuple
-import warnings
 import pickle
+import sys
+from typing import Any, Dict, List, Optional, Tuple
+import warnings
 
 from PIL import Image
 import h5py
 from h5py import Dataset
 import numpy as np
-import psutil
 import pandas as pd
+import psutil
+from rich.console import Console
 from scipy.spatial import distance as sdist
 from sklearn.model_selection import train_test_split
 import timm
 import torch
-from building_image_triplet_model.model import GeoTripletNet
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
 import yaml
-from rich.console import Console
+
+from building_image_triplet_model.model import GeoTripletNet
 
 
 @dataclass
@@ -48,8 +48,8 @@ class ProcessingConfig:
     feature_model: str = "resnet18"  # used for backbone / training
     chunk_size: Tuple[int, int, int, int] = (1, 224, 224, 3)
     knn_k: int = 512  # number of nearest neighbours to store per target
-    precompute_backbone_embeddings: bool = False # whether to precompute backbone embeddings
-    store_raw_images: bool = True # whether to store raw images in the HDF5 file
+    precompute_backbone_embeddings: bool = False  # whether to precompute backbone embeddings
+    store_raw_images: bool = True  # whether to store raw images in the HDF5 file
     cnn_batch_size: int = 32  # batch size for CNN embedding computation
     cnn_feature_model: str = "resnet18"  # smaller model for CNN similarity computation
     cnn_image_size: int = 224  # input size for cnn_feature_model
@@ -86,22 +86,10 @@ class ImageValidator:
                         top = (h - side) // 2
                         img = img.crop((left, top, left + side, top + side))
                     img = img.resize((image_size, image_size), Image.Resampling.LANCZOS)
-                    img_array = np.array(img, dtype=np.uint8)
-                    img.close()
-                    del img
-                    return img_array
+                    return np.array(img, dtype=np.uint8)
         except Exception as e:
             logger.error(f"Error processing {image_path}: {str(e)}")
             return None
-        finally:
-            gc.collect()
-
-
-def batched(iterable: Any, batch_size: int) -> Iterator:
-    """Yield batches from an iterable."""
-    iterator = iter(iterable)
-    while batch := list(islice(iterator, batch_size)):
-        yield batch
 
 
 class DatasetProcessor:
@@ -138,16 +126,16 @@ class DatasetProcessor:
         if not cache_path.exists():
             self.logger.info("No completed metadata cache found")
             return None
-        
+
         try:
             self.logger.info("Loading metadata from completed cache...")
             with open(cache_path, "rb") as f:
                 cache_data = pickle.load(f)
-            
+
             metadata_df = cache_data["metadata"]
             self.logger.info(f"Successfully loaded metadata from cache: {len(metadata_df)} rows")
             return metadata_df
-            
+
         except Exception as e:
             self.logger.warning(f"Failed to load cache: {e}")
             return None
@@ -156,7 +144,7 @@ class DatasetProcessor:
         """Save metadata to cache with two-stage approach."""
         temp_cache_path = self._get_temp_cache_path()
         final_cache_path = self._get_cache_path()
-        
+
         try:
             # First, save to temporary cache while building
             self.logger.info("Saving metadata to temporary cache...")
@@ -166,12 +154,12 @@ class DatasetProcessor:
             }
             with open(temp_cache_path, "wb") as f:
                 pickle.dump(cache_data, f)
-            
+
             # Then move to final cache location
             self.logger.info("Moving cache to final location...")
             temp_cache_path.rename(final_cache_path)
             self.logger.info(f"Successfully saved completed metadata cache to {final_cache_path}")
-            
+
         except Exception as e:
             self.logger.warning(f"Failed to save cache: {e}")
             # Clean up temp file if it exists
@@ -182,16 +170,20 @@ class DatasetProcessor:
         """Apply n_samples (target-based) and n_images (total image) limits."""
         # First apply target-based sampling if specified
         if self.config.n_samples is not None:
-            self.logger.info(f"Applying n_samples filtering (n_samples={self.config.n_samples})...")
+            self.logger.info(
+                f"Applying n_samples filtering (n_samples={self.config.n_samples})..."
+            )
             unique_tids = np.array(sorted(df["TargetID"].unique()))
             if self.config.n_samples < len(unique_tids):
                 rng = np.random.default_rng(seed=42)
-                sampled_tids = set(rng.choice(unique_tids, size=self.config.n_samples, replace=False))
+                sampled_tids = set(
+                    rng.choice(unique_tids, size=self.config.n_samples, replace=False)
+                )
                 df = df[df["TargetID"].isin(sampled_tids)].reset_index(drop=True)
                 self.logger.info(
                     f"Downsampled to {len(df)} rows across {len(sampled_tids)} TargetIDs (n_samples={self.config.n_samples})."
                 )
-        
+
         # Then apply image-based sampling if specified
         if self.config.n_images is not None and len(df) > self.config.n_images:
             self.logger.info(f"Applying n_images limit (n_images={self.config.n_images})...")
@@ -202,9 +194,9 @@ class DatasetProcessor:
             self.logger.info(
                 f"Downsampled to {len(df)} images across {df['TargetID'].nunique()} TargetIDs (n_images={self.config.n_images})."
             )
-        
+
         return df
-    
+
     def _read_metadata(self) -> pd.DataFrame:
         """Assemble metadata by parsing per-image .txt files on disk.
 
@@ -219,13 +211,13 @@ class DatasetProcessor:
         if cached_df is not None:
             # Apply sampling to cached data
             return self._apply_sampling(cached_df)
-        
+
         self.logger.info("No valid cache found. Starting metadata parsing from scratch...")
         self.logger.info("Scanning .txt metadata files from input directory…")
         txt_files = list(self.config.input_dir.rglob("*.txt"))
         if not txt_files:
             raise FileNotFoundError(f"No .txt metadata files found under {self.config.input_dir}")
-        
+
         self.logger.info(f"Found {len(txt_files)} .txt files to process")
 
         records: List[Dict[str, Any]] = []
@@ -236,16 +228,15 @@ class DatasetProcessor:
                     lines = [ln.strip() for ln in f.readlines() if ln.strip()]
                 if not lines:
                     return None
-                d_line = None
-                for ln in lines:
-                    if ln.startswith("d"):
-                        d_line = ln
-                        break
+                # Find the 'd' line using next() with default
+                d_line = next((ln for ln in lines if ln.startswith("d")), None)
                 if d_line is None:
                     return None
                 # Tokenize and drop the leading 'd'
                 parts = d_line.split()
-                if len(parts) < 4 + 3 + 3 + 3 + 4:  # ids + target(3) + normal(3) + street(3) + 4 scalars
+                if (
+                    len(parts) < 4 + 3 + 3 + 3 + 4
+                ):  # ids + target(3) + normal(3) + street(3) + 4 scalars
                     return None
                 _, ds_id_str, tgt_id_str, patch_id_str, sv_id_str, *rest = parts
                 # Extract target point (lat, lon, height)
@@ -256,11 +247,9 @@ class DatasetProcessor:
                 # Build Subpath relative to input_dir (e.g., '0088/0088')
                 subpath = txt_path.parent.relative_to(self.config.input_dir).as_posix()
                 # Determine image filename by probing common extensions
-                stem = txt_path.stem
-                image_filename: Optional[str] = None
+                image_filename = None
                 for ext in (".jpg", ".jpeg"):
-                    candidate = txt_path.with_suffix(ext)
-                    if candidate.exists():
+                    if (candidate := txt_path.with_suffix(ext)).exists():
                         image_filename = candidate.name
                         break
                 if image_filename is None:
@@ -291,11 +280,11 @@ class DatasetProcessor:
         self.logger.info(f"Parsing complete. Creating DataFrame from {len(records)} records...")
         df = pd.DataFrame.from_records(records)
         self.logger.info(f"Assembled {len(df)} rows from {len(txt_files)} .txt files.")
-        
+
         # Save to cache for future runs (save full dataset before sampling)
         self.logger.info("Saving parsed metadata to cache...")
         self._save_metadata_cache(df)
-        
+
         # Apply sampling
         df = self._apply_sampling(df)
         return df
@@ -303,7 +292,7 @@ class DatasetProcessor:
     def _build_image_path(self, row: pd.Series) -> Path:
         """Construct absolute image path from metadata row."""
         if "Subpath" in row and isinstance(row["Subpath"], str):
-            return self.config.input_dir / Path(row["Subpath"]) / row["Image filename"]
+            return self.config.input_dir / row["Subpath"] / row["Image filename"]
         # Fallback for legacy CSV-based structure (not used anymore but kept for safety)
         return self.config.input_dir / str(row["Subdirectory"]).zfill(4) / row["Image filename"]
 
@@ -322,8 +311,7 @@ class DatasetProcessor:
     def _process_image_batch(self, batch_rows: pd.DataFrame) -> List[Optional[np.ndarray]]:
         """Process a batch of images in parallel."""
         results: List[Optional[np.ndarray]] = []
-        ExecCls: type[BaseExecutor] = ProcessPoolExecutor
-        with ExecCls(max_workers=self.config.num_workers) as executor:
+        with ProcessPoolExecutor(max_workers=self.config.num_workers) as executor:
             futures = []
             for _, row in batch_rows.iterrows():
                 image_path = self._build_image_path(row)
@@ -413,9 +401,9 @@ class DatasetProcessor:
         while start < n:
             end = min(start + chunk_rows, n)
             try:
-                block = sdist.cdist(
-                    embeddings[start:end], embeddings, metric="euclidean"
-                ).astype(np.float32)
+                block = sdist.cdist(embeddings[start:end], embeddings, metric="euclidean").astype(
+                    np.float32
+                )
             except MemoryError:
                 # Reduce chunk size and retry
                 if chunk_rows <= 128:
@@ -441,10 +429,8 @@ class DatasetProcessor:
 
             # Log memory usage periodically
             if (start // chunk_rows) % 10 == 0:
-                mem_gb = process.memory_info().rss / (1024 ** 3)
-                self.logger.info(
-                    f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}"
-                )
+                mem_gb = process.memory_info().rss / (1024**3)
+                self.logger.info(f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}")
 
             start = end
         self.logger.info(f"{split_name}: stored {metric} matrix of shape {n}×{n}.")
@@ -481,22 +467,24 @@ class DatasetProcessor:
                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ]
             )
-            
+
             # Get the actual feature size from the model
             # Create a dummy input to determine feature size
-            dummy_input = torch.randn(1, 3, self.config.cnn_image_size, self.config.cnn_image_size).to(device)
+            dummy_input = torch.randn(
+                1, 3, self.config.cnn_image_size, self.config.cnn_image_size
+            ).to(device)
             with torch.no_grad():
                 dummy_output = model(dummy_input)
                 feature_size = dummy_output.shape[1]
-            
+
             # Process each target individually to avoid memory accumulation
             embeddings = np.zeros((len(targets), feature_size), dtype=np.float32)
-            
+
             for target_idx, target_id in enumerate(tqdm(targets, desc="CNN feats (targets)")):
                 # Get all images for this target
                 target_rows = df[df["TargetID"] == target_id]
                 target_features = []
-                
+
                 # Process images for this target in batches
                 batch_imgs: List[torch.Tensor] = []
                 for _, row in target_rows.iterrows():
@@ -509,7 +497,7 @@ class DatasetProcessor:
                     except Exception as e:
                         self.logger.warning(f"Skipping image {img_path}: {e}")
                         continue
-                    
+
                     if len(batch_imgs) == self.config.cnn_batch_size:
                         with torch.no_grad():
                             out = model(torch.stack(batch_imgs).to(device)).cpu().numpy()
@@ -518,7 +506,7 @@ class DatasetProcessor:
                         # Clear GPU cache after each batch
                         if device == "cuda":
                             torch.cuda.empty_cache()
-                
+
                 # Process remaining images for this target
                 if batch_imgs:
                     with torch.no_grad():
@@ -526,29 +514,33 @@ class DatasetProcessor:
                     target_features.extend(out.astype(np.float32))
                     if device == "cuda":
                         torch.cuda.empty_cache()
-                
+
                 # Compute mean embedding for this target
                 if target_features:
                     embeddings[target_idx] = np.mean(target_features, axis=0)
                 else:
                     # If no valid images, use zero vector
                     embeddings[target_idx] = np.zeros(feature_size, dtype=np.float32)
-                
+
                 # Clear target features from memory
                 del target_features
                 gc.collect()
-                
+
                 # Log memory usage every 100 targets
                 if target_idx % 100 == 0 and device == "cuda":
                     mem_allocated = torch.cuda.memory_allocated() / 1024**3
                     mem_reserved = torch.cuda.memory_reserved() / 1024**3
-                    self.logger.info(f"Target {target_idx}/{len(targets)}: GPU memory - {mem_allocated:.2f}GB allocated, {mem_reserved:.2f}GB reserved")
+                    self.logger.info(
+                        f"Target {target_idx}/{len(targets)}: GPU memory - {mem_allocated:.2f}GB allocated, {mem_reserved:.2f}GB reserved"
+                    )
         else:
             raise ValueError(f"Unknown metric {metric}")
         self.logger.info(f"Finished embeddings for metric='{metric}'. Shape: {embeddings.shape}")
         return targets, embeddings
 
-    def _precompute_backbone_embeddings(self, h5_file: h5py.File, metadata_df: pd.DataFrame) -> None:
+    def _precompute_backbone_embeddings(
+        self, h5_file: h5py.File, metadata_df: pd.DataFrame
+    ) -> None:
         self.logger.info("Precomputing backbone embeddings...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model = GeoTripletNet(backbone=self.config.feature_model, pretrained=True).to(device)
@@ -559,12 +551,12 @@ class DatasetProcessor:
         with torch.no_grad():
             backbone_output = model.backbone(dummy_input)
             backbone_output_size = backbone_output.shape[1]
-        
+
         self.logger.info(f"Backbone output size: {backbone_output_size}")
-        
+
         # Store the backbone output size in the HDF5 file for future reference
-        h5_file.attrs['backbone_output_size'] = backbone_output_size
-        
+        h5_file.attrs["backbone_output_size"] = backbone_output_size
+
         embeddings_shape = (len(metadata_df), backbone_output_size)
         embeddings_ds = h5_file.create_dataset(
             "backbone_embeddings",
@@ -586,7 +578,9 @@ class DatasetProcessor:
         batch_imgs: List[torch.Tensor] = []
         batch_indices: List[int] = []
 
-        for idx, row in tqdm(metadata_df.iterrows(), total=len(metadata_df), desc="Generating embeddings"):
+        for idx, row in tqdm(
+            metadata_df.iterrows(), total=len(metadata_df), desc="Generating embeddings"
+        ):
             img_path = self._build_image_path(row)
             try:
                 with Image.open(img_path) as im:
@@ -599,7 +593,7 @@ class DatasetProcessor:
                         out = model.backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
                     embeddings_ds[batch_indices] = out
                     batch_imgs, batch_indices = [], []
-                    # Clear GPU cache after each batch  
+                    # Clear GPU cache after each batch
                     if device == "cuda":
                         torch.cuda.empty_cache()
             except Exception as e:
@@ -735,36 +729,42 @@ def _infer_image_size_from_model(model_name: str, console: Console) -> int:
     """Infer image size from a TIMM model's default configuration."""
     try:
         dummy_model = timm.create_model(model_name, pretrained=False)
-        if hasattr(dummy_model, 'default_cfg') and 'input_size' in dummy_model.default_cfg:
-            input_size = dummy_model.default_cfg['input_size']
+        if hasattr(dummy_model, "default_cfg") and "input_size" in dummy_model.default_cfg:
+            input_size = dummy_model.default_cfg["input_size"]
             if isinstance(input_size, (list, tuple)) and len(input_size) > 1:
                 image_size = input_size[1]  # Assuming square images
-                console.print(f"[green]Inferred image_size={image_size} from model {model_name}[/green]")
+                console.print(
+                    f"[green]Inferred image_size={image_size} from model {model_name}[/green]"
+                )
                 return image_size
-        console.print(f"[yellow]Could not infer image_size from model {model_name}, using default 224[/yellow]")
+        console.print(
+            f"[yellow]Could not infer image_size from model {model_name}, using default 224[/yellow]"
+        )
         return 224
     except Exception as e:
-        console.print(f"[red]Error inferring image_size from model {model_name}: {e}, using default 224[/red]")
+        console.print(
+            f"[red]Error inferring image_size from model {model_name}: {e}, using default 224[/red]"
+        )
         return 224
 
 
 def _load_processing_config(config_path: Path) -> ProcessingConfig:
     """Load and create ProcessingConfig from YAML file."""
     console = Console()
-    
+
     with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
-    
+
     data_cfg = config_dict.get("data", {})
-    
+
     # Get basic paths
     input_dir = Path(data_cfg.get("input_dir", "data/raw"))
     output_file = Path(data_cfg.get("hdf5_path", "data/processed/dataset.h5"))
-    
+
     # Get sampling parameters
     n_samples = data_cfg.get("n_samples", None)
     n_images = data_cfg.get("n_images", None)
-    
+
     # Get processing parameters
     batch_size = data_cfg.get("batch_size", 100)
     num_workers = data_cfg.get("num_workers", 4)
@@ -772,19 +772,19 @@ def _load_processing_config(config_path: Path) -> ProcessingConfig:
     feature_model = data_cfg.get("feature_model", "resnet18")
     store_raw_images = data_cfg.get("store_raw_images", True)
     precompute_backbone_embeddings = data_cfg.get("precompute_backbone_embeddings", False)
-    
+
     # Handle image sizes with proper inference
     image_size = data_cfg.get("image_size")
     if image_size is None:
         image_size = _infer_image_size_from_model(feature_model, console)
-    
+
     cnn_feature_model = data_cfg.get("cnn_feature_model", "resnet18")
     cnn_image_size = data_cfg.get("cnn_image_size")
     if cnn_image_size is None:
         cnn_image_size = _infer_image_size_from_model(cnn_feature_model, console)
-    
+
     cnn_batch_size = data_cfg.get("cnn_batch_size", 32)
-    
+
     return ProcessingConfig(
         input_dir=input_dir,
         output_file=output_file,
@@ -806,28 +806,32 @@ def _load_processing_config(config_path: Path) -> ProcessingConfig:
 def _update_config_file(config_path: Path, config: ProcessingConfig) -> None:
     """Update the YAML config file with processed values."""
     console = Console()
-    
+
     with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
-    
+
     # Update data section with processed values
     config_dict.setdefault("data", {})
     config_dict["data"]["hdf5_path"] = str(config.output_file)
     config_dict["data"]["image_size"] = config.image_size
     config_dict["data"]["cnn_feature_model"] = config.cnn_feature_model
     config_dict["data"]["cnn_image_size"] = config.cnn_image_size
-    
+
     # If backbone embeddings were precomputed, read the backbone output size from HDF5
     if config.precompute_backbone_embeddings:
         try:
             with h5py.File(config.output_file, "r") as f:
-                if 'backbone_output_size' in f.attrs:
-                    backbone_output_size = int(f.attrs['backbone_output_size'])
-                    config_dict.setdefault("model", {})["backbone_output_size"] = backbone_output_size
-                    console.print(f"[green]Updated config with backbone_output_size: {backbone_output_size}[/green]")
+                if "backbone_output_size" in f.attrs:
+                    backbone_output_size = int(f.attrs["backbone_output_size"])
+                    config_dict.setdefault("model", {})[
+                        "backbone_output_size"
+                    ] = backbone_output_size
+                    console.print(
+                        f"[green]Updated config with backbone_output_size: {backbone_output_size}[/green]"
+                    )
         except Exception as e:
             console.print(f"[yellow]Could not read backbone_output_size from HDF5: {e}[/yellow]")
-    
+
     # Write updated config back to file
     with open(config_path, "w") as f:
         yaml.safe_dump(config_dict, f)
@@ -835,16 +839,18 @@ def _update_config_file(config_path: Path, config: ProcessingConfig) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Process building typology dataset")
-    parser.add_argument("--config", type=Path, required=True, help="Path to YAML config file (required)")
+    parser.add_argument(
+        "--config", type=Path, required=True, help="Path to YAML config file (required)"
+    )
     args = parser.parse_args()
-    
+
     # Load configuration
     config = _load_processing_config(args.config)
-    
+
     # Process dataset
     processor = DatasetProcessor(config)
     processor.process_dataset()
-    
+
     # Update config file with processed values
     _update_config_file(args.config, config)
 
