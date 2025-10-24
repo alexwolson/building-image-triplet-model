@@ -770,7 +770,7 @@ def main() -> None:
                 image_size = 224
     difficulty_metric = args.difficulty_metric or data_cfg.get("difficulty_metric", "geo")
     feature_model = args.feature_model or data_cfg.get("feature_model", "resnet18")
-    store_raw_images = args.store_raw_images if args.store_raw_images is not None else data_cfg.get("store_raw_images", True)
+    store_raw_images = data_cfg.get("store_raw_images", True) if not args.store_raw_images else True
     cnn_batch_size = args.cnn_batch_size if args.cnn_batch_size is not None else data_cfg.get("cnn_batch_size", 32)
     cnn_feature_model = args.cnn_feature_model or data_cfg.get("cnn_feature_model", "resnet18")
     cnn_image_size = args.cnn_image_size if args.cnn_image_size is not None else data_cfg.get("cnn_image_size")
