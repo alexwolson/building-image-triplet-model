@@ -89,7 +89,7 @@ class HDF5Writer:
         for batch_idx, batch in enumerate(
             tqdm(
                 batched(metadata_df.iterrows(), self.config.batch_size),
-                total=(len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size,
+                total=-(-len(metadata_df) // self.config.batch_size),  # Ceiling division
                 desc="Processing batches",
             )
         ):

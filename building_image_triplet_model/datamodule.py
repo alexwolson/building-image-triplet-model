@@ -28,7 +28,7 @@ class GeoTripletDataModule(LightningDataModule):
         cache_size: int = 1000,
     ):
         super().__init__()
-        
+
         # Validate parameters before assignment
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
@@ -40,7 +40,7 @@ class GeoTripletDataModule(LightningDataModule):
             )
         if cache_size <= 0:
             raise ValueError(f"cache_size must be positive, got {cache_size}")
-        
+
         # Assign validated parameters
         self.hdf5_path: str = hdf5_path
         self.batch_size: int = batch_size

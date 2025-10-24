@@ -3,9 +3,11 @@ Comprehensive tests for datamodule.py correctness.
 Tests validate GeoTripletDataModule implementation and PyTorch Lightning conventions.
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
+
+import pytest
+
 from building_image_triplet_model.datamodule import GeoTripletDataModule
 
 
@@ -142,9 +144,7 @@ class TestGeoTripletDataModuleDataLoaders:
         mock_dataset.__len__.return_value = 100
         mock_dataset_class.return_value = mock_dataset
 
-        dm = GeoTripletDataModule(
-            hdf5_path="test.h5", batch_size=32, num_workers=4
-        )
+        dm = GeoTripletDataModule(hdf5_path="test.h5", batch_size=32, num_workers=4)
         dm.setup(stage="fit")
 
         loader = dm.train_dataloader()
@@ -165,9 +165,7 @@ class TestGeoTripletDataModuleDataLoaders:
         mock_dataset.__len__.return_value = 100
         mock_dataset_class.return_value = mock_dataset
 
-        dm = GeoTripletDataModule(
-            hdf5_path="test.h5", batch_size=32, num_workers=4
-        )
+        dm = GeoTripletDataModule(hdf5_path="test.h5", batch_size=32, num_workers=4)
         dm.setup(stage="fit")
 
         loader = dm.val_dataloader()
@@ -186,9 +184,7 @@ class TestGeoTripletDataModuleDataLoaders:
         mock_dataset.__len__.return_value = 100
         mock_dataset_class.return_value = mock_dataset
 
-        dm = GeoTripletDataModule(
-            hdf5_path="test.h5", batch_size=16, num_workers=0
-        )
+        dm = GeoTripletDataModule(hdf5_path="test.h5", batch_size=16, num_workers=0)
         dm.setup(stage="fit")
 
         train_loader = dm.train_dataloader()
@@ -227,9 +223,7 @@ class TestGeoTripletDataModuleDataLoaders:
         mock_dataset.__len__.return_value = 100
         mock_dataset_class.return_value = mock_dataset
 
-        dm = GeoTripletDataModule(
-            hdf5_path="test.h5", batch_size=32, num_workers=4
-        )
+        dm = GeoTripletDataModule(hdf5_path="test.h5", batch_size=32, num_workers=4)
         dm.setup(stage="test")
 
         loader = dm.test_dataloader()
@@ -247,9 +241,11 @@ class TestGeoTripletDataModuleTeardown:
     @patch("building_image_triplet_model.datamodule.GeoTripletDataset")
     def test_teardown_fit_stage(self, mock_dataset_class):
         """Test teardown properly closes datasets."""
+
         # Patch GeoTripletDataset to always return a new MagicMock
         def dataset_factory(*args, **kwargs):
             return MagicMock()
+
         mock_dataset_class.side_effect = dataset_factory
 
         dm = GeoTripletDataModule(hdf5_path="test.h5")
@@ -269,9 +265,11 @@ class TestGeoTripletDataModuleTeardown:
     @patch("building_image_triplet_model.datamodule.GeoTripletDataset")
     def test_teardown_none_stage(self, mock_dataset_class):
         """Test teardown with None stage closes datasets."""
+
         # Patch GeoTripletDataset to always return a new MagicMock
         def dataset_factory(*args, **kwargs):
             return MagicMock()
+
         mock_dataset_class.side_effect = dataset_factory
 
         dm = GeoTripletDataModule(hdf5_path="test.h5")

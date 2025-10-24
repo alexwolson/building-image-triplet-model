@@ -8,6 +8,8 @@ from building_image_triplet_model.datamodule import GeoTripletDataModule  # noqa
 from building_image_triplet_model.model import GeoTripletNet
 from building_image_triplet_model.preprocessing import (
     ProcessingConfig,
+)
+from building_image_triplet_model.preprocessing import (
     update_config_file as _update_config_file,
 )
 from building_image_triplet_model.triplet_dataset import GeoTripletDataset

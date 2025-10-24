@@ -199,7 +199,7 @@ class GeoTripletDataset(Dataset):
         row[anchor_row] = np.inf
 
         if len(self.row_cache) >= self.row_cache_size:
-            self.row_cache.pop(next(iter(self.row_cache)))
+            self.row_cache.popitem(last=False)
         self.row_cache[anchor_row] = row
         return row
 
@@ -266,7 +266,7 @@ class GeoTripletDataset(Dataset):
             logger.error(f"Failed to load data at index {global_idx}: {e}")
             raise
         if len(self.cache) >= self.cache_size:
-            self.cache.pop(next(iter(self.cache)))
+            self.cache.popitem(last=False)
         self.cache[global_idx] = data
         return data
 
@@ -279,7 +279,7 @@ class GeoTripletDataset(Dataset):
         tensor = torch.from_numpy(data).float()
 
         if len(self.tensor_cache) >= self.cache_size:
-            self.tensor_cache.pop(next(iter(self.tensor_cache)))
+            self.tensor_cache.popitem(last=False)
         self.tensor_cache[local_idx] = tensor
         return tensor
 

@@ -99,7 +99,7 @@ class MetadataManager:
             self.logger.info(
                 f"Applying n_samples filtering (n_samples={self.config.n_samples})..."
             )
-            unique_tids = np.array(sorted(df["TargetID"].unique()))
+            unique_tids = np.sort(df["TargetID"].unique())
             if self.config.n_samples < len(unique_tids):
                 rng = np.random.default_rng(seed=42)
                 sampled_tids = set(
@@ -117,7 +117,7 @@ class MetadataManager:
             # Sample images randomly but ensure we keep all targets that have at least one image
             rng = np.random.default_rng(seed=42)
             sampled_indices = rng.choice(len(df), size=self.config.n_images, replace=False)
-            df = df.iloc[sorted(sampled_indices)].reset_index(drop=True)
+            df = df.iloc[np.sort(sampled_indices)].reset_index(drop=True)
             self.logger.info(
                 f"Downsampled to {len(df)} images across {df['TargetID'].nunique()} "
                 f"TargetIDs (n_images={self.config.n_images})."
