@@ -179,7 +179,7 @@ def main():
     )
     parser.add_argument("--offline", action="store_true", help="Disable W&B online sync")
     parser.add_argument("--use-precomputed-embeddings", action="store_true", help="Use precomputed embeddings from HDF5")
-    parser.add_argument("--store-raw-images", action="store_true", help="Whether to store raw images in the HDF5 file")
+    parser.add_argument("--store-raw-images", action="store_false", default=True, help="Disable storing raw images in the HDF5 file (default: store raw images)")
     args = parser.parse_args()
     config = load_config(args.config)
     # Set random seeds
