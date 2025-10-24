@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-import yaml
 from rich.console import Console
+import yaml
 
 
 @dataclass
@@ -35,6 +35,7 @@ def infer_image_size_from_model(model_name: str, console: Console) -> int:
     """Infer image size from a TIMM model's default configuration."""
     try:
         import timm
+
         dummy_model = timm.create_model(model_name, pretrained=False)
         if hasattr(dummy_model, "default_cfg") and "input_size" in dummy_model.default_cfg:
             input_size = dummy_model.default_cfg["input_size"]
@@ -114,12 +115,11 @@ def update_config_file(config_path: Path, config: ProcessingConfig) -> None:
     # Read the backbone output size from HDF5
     try:
         import h5py
+
         with h5py.File(config.output_file, "r") as f:
             if "backbone_output_size" in f.attrs:
                 backbone_output_size = int(f.attrs["backbone_output_size"])
-                config_dict.setdefault("model", {})[
-                    "backbone_output_size"
-                ] = backbone_output_size
+                config_dict.setdefault("model", {})["backbone_output_size"] = backbone_output_size
                 console.print(
                     f"[green]Updated config with backbone_output_size: {backbone_output_size}[/green]"
                 )

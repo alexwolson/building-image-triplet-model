@@ -1,8 +1,8 @@
 """Metadata parsing, caching, and data splitting utilities."""
 
 import logging
-import pickle
 from pathlib import Path
+import pickle
 from typing import Any, Dict, List, Optional
 
 import numpy as np

@@ -1,9 +1,9 @@
 """HDF5 file operations for dataset storage."""
 
-import gc
-import logging
 from concurrent.futures import ProcessPoolExecutor
+import gc
 from itertools import batched
+import logging
 from typing import List, Optional
 
 import h5py
@@ -35,7 +35,7 @@ class HDF5Writer:
         """Process a batch of images in parallel."""
         results: List[Optional[np.ndarray]] = []
         metadata_manager = MetadataManager(self.config)
-        
+
         with ProcessPoolExecutor(max_workers=self.config.num_workers) as executor:
             futures = []
             for _, row in batch_rows.iterrows():
@@ -81,18 +81,15 @@ class HDF5Writer:
                 split_name, data=split_targets, compression="lzf"
             )
 
-    def process_and_store_images(
-        self, h5_file, metadata_df: pd.DataFrame
-    ) -> List[int]:
+    def process_and_store_images(self, h5_file, metadata_df: pd.DataFrame) -> List[int]:
         """Process images to get valid indices (without storing raw images)."""
         current_idx = 0  # Global row counter in metadata_df order
         valid_indices: List[int] = []
-        
+
         for batch_idx, batch in enumerate(
             tqdm(
                 batched(metadata_df.iterrows(), self.config.batch_size),
-                total=(len(metadata_df) + self.config.batch_size - 1)
-                // self.config.batch_size,
+                total=(len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size,
                 desc="Processing batches",
             )
         ):
@@ -105,7 +102,7 @@ class HDF5Writer:
             current_idx += len(processed_images)
             del processed_images
             gc.collect()
-        
+
         # Store valid_indices as a compact dataset
         images_group = h5_file["images"]  # type: ignore[assignment]
         images_group.create_dataset(  # type: ignore[attr-defined]
@@ -113,5 +110,5 @@ class HDF5Writer:
             data=np.asarray(valid_indices, dtype=np.int64),
             compression="lzf",
         )
-        
+
         return valid_indices
