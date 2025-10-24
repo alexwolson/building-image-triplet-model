@@ -554,7 +554,18 @@ class DatasetProcessor:
         model = GeoTripletNet(backbone=self.config.feature_model, pretrained=True).to(device)
         model.eval()
 
-        embeddings_shape = (len(metadata_df), model.hparams.get("embedding_size", 128))
+        # Get the actual backbone output size by running a dummy input through the backbone
+        dummy_input = torch.randn(1, 3, self.config.image_size, self.config.image_size).to(device)
+        with torch.no_grad():
+            backbone_output = model.backbone(dummy_input)
+            backbone_output_size = backbone_output.shape[1]
+        
+        self.logger.info(f"Backbone output size: {backbone_output_size}")
+        
+        # Store the backbone output size in the HDF5 file for future reference
+        h5_file.attrs['backbone_output_size'] = backbone_output_size
+        
+        embeddings_shape = (len(metadata_df), backbone_output_size)
         embeddings_ds = h5_file.create_dataset(
             "backbone_embeddings",
             shape=embeddings_shape,
@@ -588,13 +599,13 @@ class DatasetProcessor:
                         out = model.backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
                     embeddings_ds[batch_indices] = out
                     batch_imgs, batch_indices = [], []
-                    # Clear GPU cache after each batch
+                    # Clear GPU cache after each batch  
                     if device == "cuda":
                         torch.cuda.empty_cache()
             except Exception as e:
                 self.logger.warning(f"Skipping image {img_path} due to error: {e}")
                 # Store a zero vector for problematic images
-                embeddings_ds[idx] = np.zeros(model.hparams.get("embedding_size", 128), dtype=np.float32)
+                embeddings_ds[idx] = np.zeros(backbone_output_size, dtype=np.float32)
 
         # Process any remaining images in the last batch
         if batch_imgs:
@@ -737,6 +748,7 @@ def main() -> None:
     parser.add_argument("--cnn-batch-size", type=int, help="Batch size for CNN embedding computation (overrides config)")
     parser.add_argument("--cnn-feature-model", help="TIMM model name for CNN similarity (overrides config)")
     parser.add_argument("--cnn-image-size", type=int, help="Input size for CNN similarity model (overrides config)")
+    parser.add_argument("--precompute-backbone-embeddings", action='store_true', help="Precompute backbone embeddings and store in HDF5 (overrides config)")
     args = parser.parse_args()
     # Load config from YAML
     with open(args.config, "r") as f:
@@ -774,6 +786,7 @@ def main() -> None:
     cnn_batch_size = args.cnn_batch_size if args.cnn_batch_size is not None else data_cfg.get("cnn_batch_size", 32)
     cnn_feature_model = args.cnn_feature_model or data_cfg.get("cnn_feature_model", "resnet18")
     cnn_image_size = args.cnn_image_size if args.cnn_image_size is not None else data_cfg.get("cnn_image_size")
+    precompute_backbone_embeddings = args.precompute_backbone_embeddings or data_cfg.get("precompute_backbone_embeddings", False)
     if cnn_image_size is None:
         try:
             dummy_cnn_model = timm.create_model(cnn_feature_model, pretrained=False)
@@ -798,14 +811,27 @@ def main() -> None:
         cnn_batch_size=cnn_batch_size,
         cnn_feature_model=cnn_feature_model,
         cnn_image_size=cnn_image_size,
+        precompute_backbone_embeddings=precompute_backbone_embeddings,
     )
     processor = DatasetProcessor(config)
     processor.process_dataset()
-    # Update YAML config with the processed HDF5 path
+    # Update YAML config with the processed HDF5 path and backbone output size
     config_dict.setdefault("data", {})["hdf5_path"] = str(output_file)
     config_dict.setdefault("data", {})["image_size"] = image_size
     config_dict.setdefault("data", {})["cnn_feature_model"] = cnn_feature_model
     config_dict.setdefault("data", {})["cnn_image_size"] = cnn_image_size
+    
+    # If backbone embeddings were precomputed, read the backbone output size from HDF5 and update config
+    if config.precompute_backbone_embeddings:
+        try:
+            with h5py.File(output_file, "r") as f:
+                if 'backbone_output_size' in f.attrs:
+                    backbone_output_size = int(f.attrs['backbone_output_size'])
+                    config_dict.setdefault("model", {})["backbone_output_size"] = backbone_output_size
+                    console.print(f"[green]Updated config with backbone_output_size: {backbone_output_size}[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Could not read backbone_output_size from HDF5: {e}[/yellow]")
+    
     with open(args.config, "w") as f:
         yaml.safe_dump(config_dict, f)
 

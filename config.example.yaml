@@ -27,6 +27,7 @@ data:
   feature_model: vit_pe_spatial_base_patch16_512.fb
   image_size: 512
   difficulty_metric: geo
+  precompute_backbone_embeddings: false  # Set to true to precompute backbone embeddings
 
 logging:
   project_name: "geo-triplet-net"
