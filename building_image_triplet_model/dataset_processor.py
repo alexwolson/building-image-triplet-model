@@ -731,7 +731,7 @@ def main() -> None:
     parser.add_argument("--image-size", type=int, help="Image size (overrides config)")
     parser.add_argument("--difficulty-metric", choices=["geo", "cnn"], help="Difficulty metric (overrides config)")
     parser.add_argument("--feature-model", help="Feature model (overrides config)")
-    parser.add_argument("--store-raw-images", type=bool, help="Whether to store raw images in the HDF5 file (overrides config)")
+    parser.add_argument("--store-raw-images", action='store_true', help="Whether to store raw images in the HDF5 file (overrides config)")
     parser.add_argument("--cnn-batch-size", type=int, help="Batch size for CNN embedding computation (overrides config)")
     parser.add_argument("--cnn-feature-model", help="TIMM model name for CNN similarity (overrides config)")
     parser.add_argument("--cnn-image-size", type=int, help="Input size for CNN similarity model (overrides config)")

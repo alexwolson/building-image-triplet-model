@@ -42,8 +42,9 @@ def load_config(config_path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
-def create_model_and_datamodule(config: dict, overrides: dict = {}, use_precomputed_embeddings: bool = False, store_raw_images: bool = True):
+def create_model_and_datamodule(config: dict, overrides: dict = None, use_precomputed_embeddings: bool = False, store_raw_images: bool = True):
     """Create model and datamodule, optionally overriding config values (e.g., for Optuna)."""
+    overrides = overrides or {}
     # Data
     hdf5_path = config["data"]["hdf5_path"]
     batch_size = overrides.get("batch_size", config["data"].get("batch_size", 32))
