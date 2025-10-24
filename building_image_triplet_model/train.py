@@ -154,6 +154,11 @@ def objective(trial: optuna.Trial, config: dict) -> float:
         enable_progress_bar=False,
     )
     trainer.fit(model, data_module)
+    if "val_loss" not in trainer.callback_metrics:
+        raise RuntimeError(
+            "Validation loss not found in callback metrics. "
+            "Ensure the model has a validation step and validation data is provided."
+        )
     val_loss = trainer.callback_metrics["val_loss"].item()
     wandb.finish()
     return val_loss
@@ -211,7 +216,7 @@ def main():
         wandb_logger = WandbLogger(
             project=config["logging"].get("project_name", "geo-triplet-net"),
             name=config["logging"].get("exp_name", None),
-            offline=config["logging"]["offline"],
+            offline=config["logging"].get("offline", False),
         )
         callbacks = [
             ModelCheckpoint(
