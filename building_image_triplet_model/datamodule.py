@@ -28,6 +28,20 @@ class GeoTripletDataModule(LightningDataModule):
         cache_size: int = 1000,
     ):
         super().__init__()
+        
+        # Validate parameters before assignment
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if num_workers < 0:
+            raise ValueError(f"num_workers must be non-negative, got {num_workers}")
+        if num_difficulty_levels <= 0:
+            raise ValueError(
+                f"num_difficulty_levels must be positive, got {num_difficulty_levels}"
+            )
+        if cache_size <= 0:
+            raise ValueError(f"cache_size must be positive, got {cache_size}")
+        
+        # Assign validated parameters
         self.hdf5_path: str = hdf5_path
         self.batch_size: int = batch_size
         self.num_workers: int = num_workers
@@ -37,18 +51,6 @@ class GeoTripletDataModule(LightningDataModule):
         self.train_dataset: Optional[GeoTripletDataset] = None
         self.val_dataset: Optional[GeoTripletDataset] = None
         self.test_dataset: Optional[GeoTripletDataset] = None
-
-        # Validate parameters
-        if self.batch_size <= 0:
-            raise ValueError(f"batch_size must be positive, got {self.batch_size}")
-        if self.num_workers < 0:
-            raise ValueError(f"num_workers must be non-negative, got {self.num_workers}")
-        if self.num_difficulty_levels <= 0:
-            raise ValueError(
-                f"num_difficulty_levels must be positive, got {self.num_difficulty_levels}"
-            )
-        if self.cache_size <= 0:
-            raise ValueError(f"cache_size must be positive, got {self.cache_size}")
 
         # Transforms are not used with precomputed embeddings, but kept for compatibility
         self.train_transform = None
