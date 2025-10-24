@@ -77,7 +77,7 @@ class GeoTripletDataset(Dataset):
 
         if self.use_precomputed_embeddings:
             if "backbone_embeddings" not in self.h5_file:
-                raise ValueError("Precomputed backbone embeddings not found in HDF5 file.")
+                raise ValueError(f"Precomputed backbone embeddings not found in HDF5 file: {self.hdf5_path}")
             self.embeddings_dataset = self.h5_file["backbone_embeddings"]
             logger.info("Using precomputed backbone embeddings.")
         elif self.store_raw_images:
