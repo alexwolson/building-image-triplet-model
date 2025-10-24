@@ -133,7 +133,7 @@ python -m building_image_triplet_model.dataset_processor --config config.yaml
 This will:
 - Parse metadata from `.txt` files in the input directory
 - Process and resize images
-- Compute geographical distance embeddings
+- Compute geographical coordinate embeddings and distance matrices
 - Save everything to an HDF5 file for efficient training
 
 ### Running Tests
