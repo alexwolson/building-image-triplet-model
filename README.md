@@ -530,8 +530,8 @@ If you use this code in your research, please cite:
 
 ```bibtex
 @software{building_image_triplet_model,
-  author = {Olson, Alex},
-  title = {Building Image Triplet Model},
+  author = {Olson, Alexander},
+  title = {Building Image Triplet Model: Geographical Triplet Network for Building Embeddings},
   year = {2024},
   url = {https://github.com/alexwolson/building-image-triplet-model}
 }
