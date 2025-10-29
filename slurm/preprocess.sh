@@ -93,42 +93,30 @@ else
 fi
 echo ""
 
-# Function to extract archive files with error handling
-extract_archives() {
-    local pattern="$1"
-    shift
-    local tar_flags=("$@")
-    
-    # Use find to robustly list matching files and process with while loop
-    while IFS= read -r tar_file; do
-        if [[ ! -f "${tar_file}" ]]; then
-            continue  # Skip if not a valid file
-        fi
-        
-        filename=$(basename "${tar_file}")
-        echo "[$(date)] Extracting ${filename}..."
-        
-        # Extract with error handling - continue on failure
-        if tar "${tar_flags[@]}" "${tar_file}" 2>&1; then
-            echo "[$(date)] Successfully extracted ${filename}"
-            EXTRACTED_COUNT=$((EXTRACTED_COUNT + 1))
-        else
-            echo "[$(date)] WARNING: Failed to extract ${filename}, continuing..."
-            FAILED_COUNT=$((FAILED_COUNT + 1))
-            FAILED_FILES+=("${filename}")
-        fi
-    done < <(find "$(dirname "${pattern}")" -maxdepth 1 -type f -name "$(basename "${pattern}")" 2>/dev/null)
-}
-
 # Loop through tar files with graceful error handling
 EXTRACTED_COUNT=0
 FAILED_COUNT=0
 FAILED_FILES=()
 
-# Process all archive formats
-extract_archives "${TAR_SOURCE_DIR}/*.tar" -xf
-extract_archives "${TAR_SOURCE_DIR}/*.tar.gz" -xzf
-extract_archives "${TAR_SOURCE_DIR}/*.tgz" -xzf
+# Process .tar files
+for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SOURCE_DIR}"/*.tgz; do
+    if [[ ! -f "${tar_file}" ]]; then
+        continue  # Skip if glob didn't match any files
+    fi
+    
+    filename=$(basename "${tar_file}")
+    echo "[$(date)] Extracting ${filename}..."
+    
+    # Extract with error handling - continue on failure
+    if tar -xf "${tar_file}" 2>&1; then
+        echo "[$(date)] Successfully extracted ${filename}"
+        EXTRACTED_COUNT=$((EXTRACTED_COUNT + 1))
+    else
+        echo "[$(date)] WARNING: Failed to extract ${filename}, continuing..."
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        FAILED_FILES+=("${filename}")
+    fi
+done
 
 echo ""
 echo "[$(date)] Extraction complete: ${EXTRACTED_COUNT} succeeded, ${FAILED_COUNT} failed"
