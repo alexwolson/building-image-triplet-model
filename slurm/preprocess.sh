@@ -26,7 +26,7 @@ echo "=========================================="
 module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 # Define paths
-TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view_archives/dataset_unaligned"
+TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/dataset_unaligned"
 EXTRACT_DIR="${SLURM_TMPDIR}/extracted_dataset"
 PROJECT_SOURCE="/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model"
 PROJECT_DIR="${SLURM_TMPDIR}/building-image-triplet-model"
@@ -79,15 +79,28 @@ echo "[$(date)] Starting tar file extraction..."
 mkdir -p "${EXTRACT_DIR}"
 cd "${EXTRACT_DIR}"
 
+# Debug: List available archive files in source directory
+echo "[$(date)] Searching for archive files in ${TAR_SOURCE_DIR}..."
+if [[ -d "${TAR_SOURCE_DIR}" ]]; then
+    AVAILABLE_ARCHIVES=$(find "${TAR_SOURCE_DIR}" -maxdepth 1 -type f \( -name "*.tar" -o -name "*.tar.gz" -o -name "*.tgz" \) 2>/dev/null | wc -l)
+    echo "[$(date)] Found ${AVAILABLE_ARCHIVES} archive files (.tar, .tar.gz, .tgz)"
+    if [[ ${AVAILABLE_ARCHIVES} -gt 0 ]]; then
+        echo "[$(date)] Sample archive files:"
+        find "${TAR_SOURCE_DIR}" -maxdepth 1 -type f \( -name "*.tar" -o -name "*.tar.gz" -o -name "*.tgz" \) 2>/dev/null | head -5
+    fi
+else
+    echo "[$(date)] WARNING: TAR_SOURCE_DIR does not exist or is not accessible: ${TAR_SOURCE_DIR}"
+fi
+echo ""
+
 # Loop through tar files with graceful error handling
 EXTRACTED_COUNT=0
 FAILED_COUNT=0
 FAILED_FILES=()
 
-for tar_file in "${TAR_SOURCE_DIR}"/*.tar; do
-    if [[ ! -f "${tar_file}" ]]; then
-        continue  # Skip if glob didn't match any files
-    fi
+# Process .tar files
+shopt -s nullglob
+for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SOURCE_DIR}"/*.tgz; do
     
     filename=$(basename "${tar_file}")
     echo "[$(date)] Extracting ${filename}..."
@@ -95,10 +108,10 @@ for tar_file in "${TAR_SOURCE_DIR}"/*.tar; do
     # Extract with error handling - continue on failure
     if tar -xf "${tar_file}" 2>&1; then
         echo "[$(date)] Successfully extracted ${filename}"
-        ((EXTRACTED_COUNT++))
+        EXTRACTED_COUNT=$((EXTRACTED_COUNT + 1))
     else
         echo "[$(date)] WARNING: Failed to extract ${filename}, continuing..."
-        ((FAILED_COUNT++))
+        FAILED_COUNT=$((FAILED_COUNT + 1))
         FAILED_FILES+=("${filename}")
     fi
 done
@@ -113,6 +126,11 @@ echo ""
 # Verify extraction results
 if [[ ${EXTRACTED_COUNT} -eq 0 ]]; then
     echo "ERROR: No tar files were successfully extracted!" >&2
+    echo "Searched for files matching: *.tar, *.tar.gz, *.tgz in ${TAR_SOURCE_DIR}" >&2
+    echo "Please verify:" >&2
+    echo "  1. The TAR_SOURCE_DIR path is correct" >&2
+    echo "  2. Archive files exist in that directory" >&2
+    echo "  3. You have read permissions for the directory and files" >&2
     exit 1
 fi
 
