@@ -4,6 +4,7 @@ from concurrent.futures import ProcessPoolExecutor
 import gc
 from itertools import batched
 import logging
+import os
 from typing import List, Optional
 
 import h5py
@@ -91,6 +92,7 @@ class HDF5Writer:
                 batched(metadata_df.iterrows(), self.config.batch_size),
                 total=(len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size,
                 desc="Processing batches",
+                disable=os.environ.get("SLURM_JOB_ID") is not None,
             )
         ):
             batch_df = pd.DataFrame([row for _, row in batch])

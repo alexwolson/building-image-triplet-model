@@ -1,6 +1,7 @@
 """Metadata parsing, caching, and data splitting utilities."""
 
 import logging
+import os
 from pathlib import Path
 import pickle
 from typing import Any, Dict, List, Optional
@@ -210,7 +211,9 @@ class MetadataManager:
         records: List[Dict[str, Any]] = []
 
         self.logger.info("Starting to parse .txt metadata files...")
-        for p in tqdm(txt_files, desc="Parsing .txt metadata"):
+        for p in tqdm(
+            txt_files, desc="Parsing .txt metadata", disable=os.environ.get("SLURM_JOB_ID") is not None
+        ):
             rec = self._parse_txt_file(p)
             if rec is not None:
                 records.append(rec)
