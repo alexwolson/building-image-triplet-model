@@ -52,7 +52,7 @@ echo "[$(date)] Setting up environment..."
 if ! command -v uv &> /dev/null; then
     echo "[$(date)] Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    source "$HOME"/.cargo/env
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 
 # Copy project to SLURM_TMPDIR
