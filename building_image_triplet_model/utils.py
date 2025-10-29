@@ -6,7 +6,11 @@ import timm
 import torch
 
 
-def get_backbone_output_size(backbone_name: str, backbone_output_size: Optional[int] = None) -> int:
+def get_backbone_output_size(
+    backbone_name: str,
+    backbone_output_size: Optional[int] = None,
+    backbone_model: Optional[torch.nn.Module] = None,
+) -> int:
     """
     Determine the output size of a backbone model.
 
@@ -15,6 +19,8 @@ def get_backbone_output_size(backbone_name: str, backbone_output_size: Optional[
         backbone_output_size: Explicit size of backbone output features. If provided,
             this value is returned directly. If None, will be automatically determined
             from the backbone model.
+        backbone_model: Optional existing backbone model to extract size from. If provided,
+            avoids creating a temporary model.
 
     Returns:
         The output feature size of the backbone model.
@@ -25,8 +31,14 @@ def get_backbone_output_size(backbone_name: str, backbone_output_size: Optional[
     if backbone_output_size is not None:
         return backbone_output_size
 
-    # Dynamically determine backbone output size
-    temp_backbone = timm.create_model(backbone_name, pretrained=False, num_classes=0)
+    # Use existing model if provided, otherwise create temporary one
+    if backbone_model is not None:
+        temp_backbone = backbone_model
+        cleanup = False
+    else:
+        temp_backbone = timm.create_model(backbone_name, pretrained=False, num_classes=0)
+        cleanup = True
+
     in_features = getattr(temp_backbone, "num_features", None)
     if in_features is None:
         # Try common fallback
@@ -36,7 +48,10 @@ def get_backbone_output_size(backbone_name: str, backbone_output_size: Optional[
             f"Could not determine output size for backbone '{backbone_name}'. "
             "Please specify backbone_output_size explicitly."
         )
-    del temp_backbone  # Clean up temporary model
+
+    if cleanup:
+        del temp_backbone  # Clean up temporary model
+
     return in_features
 
 

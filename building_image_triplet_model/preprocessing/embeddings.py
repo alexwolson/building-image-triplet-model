@@ -48,8 +48,10 @@ class EmbeddingComputer:
             self.config.feature_model, pretrained=True, device=device
         )
 
-        # Get the backbone output size using shared utility
-        backbone_output_size = get_backbone_output_size(self.config.feature_model)
+        # Get the backbone output size from the created model
+        backbone_output_size = get_backbone_output_size(
+            self.config.feature_model, backbone_model=backbone
+        )
 
         self.logger.info(f"Backbone output size: {backbone_output_size}")
 
