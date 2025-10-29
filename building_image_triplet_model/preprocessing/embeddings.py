@@ -1,6 +1,7 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
+import os
 from typing import List, Tuple
 
 from PIL import Image
@@ -82,7 +83,10 @@ class EmbeddingComputer:
         metadata_manager = MetadataManager(self.config)
 
         for idx, row in tqdm(
-            metadata_df.iterrows(), total=len(metadata_df), desc="Generating embeddings"
+            metadata_df.iterrows(),
+            total=len(metadata_df),
+            desc="Generating embeddings",
+            disable=os.environ.get("SLURM_JOB_ID") is not None,
         ):
             img_path = metadata_manager.build_image_path(row)
             try:
