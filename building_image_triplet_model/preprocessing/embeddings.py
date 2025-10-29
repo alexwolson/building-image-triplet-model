@@ -13,6 +13,7 @@ from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
 
+from ..utils import create_backbone_model, get_backbone_output_size
 from .config import ProcessingConfig
 from .metadata import MetadataManager
 
@@ -42,17 +43,15 @@ class EmbeddingComputer:
         self.logger.info("Precomputing backbone embeddings...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Import here to avoid circular imports
-        from building_image_triplet_model.model import GeoTripletNet
+        # Create backbone model using shared utility
+        backbone = create_backbone_model(
+            self.config.feature_model, pretrained=True, device=device
+        )
 
-        model = GeoTripletNet(backbone=self.config.feature_model, pretrained=True).to(device)
-        model.eval()
-
-        # Get the actual backbone output size by running a dummy input through the backbone
-        dummy_input = torch.randn(1, 3, self.config.image_size, self.config.image_size).to(device)
-        with torch.no_grad():
-            backbone_output = model.backbone(dummy_input)
-            backbone_output_size = backbone_output.shape[1]
+        # Get the backbone output size from the created model
+        backbone_output_size = get_backbone_output_size(
+            self.config.feature_model, backbone_model=backbone
+        )
 
         self.logger.info(f"Backbone output size: {backbone_output_size}")
 
@@ -94,7 +93,7 @@ class EmbeddingComputer:
 
                 if len(batch_imgs) == self.config.batch_size:
                     with torch.no_grad():
-                        out = model.backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
+                        out = backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
                     embeddings_ds[batch_indices] = out
                     batch_imgs, batch_indices = [], []
                     # Clear GPU cache after each batch
@@ -108,7 +107,7 @@ class EmbeddingComputer:
         # Process any remaining images in the last batch
         if batch_imgs:
             with torch.no_grad():
-                out = model.backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
+                out = backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
             embeddings_ds[batch_indices] = out
             # Clear GPU cache after final batch
             if device == "cuda":
