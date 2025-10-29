@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a machine learning project for training a geographical triplet network model using building images. The project uses PyTorch Lightning for training and supports both standard training and Optuna-based hyperparameter optimization.
+This is a machine learning project for training a geographical triplet network model using building images. The project uses PyTorch Lightning for training.
 
 ## Python Version
 
@@ -32,7 +32,6 @@ Key configuration sections:
 - `model` - Backbone, embedding size, training parameters
 - `train` - Learning rate, epochs, precision, etc.
 - `logging` - W&B project name, checkpoint directory
-- `optuna` - Hyperparameter optimization settings
 - `auto_batch_size` - Automatic batch size finding
 
 ## Code Style and Formatting
@@ -78,17 +77,10 @@ python -m building_image_triplet_model.train --config config.yaml
 python -m building_image_triplet_model.dataset_processor --config config.yaml
 ```
 
-### Optuna Hyperparameter Optimization
-Set `optuna.enabled: true` in config file, then:
-```bash
-python -m building_image_triplet_model.train --config config.yaml
-```
-
 ## Key Dependencies
 
 - **PyTorch Lightning** (~2.5.0) - Training framework
 - **timm** (~1.0.15) - Vision model backbones
-- **Optuna** (~4.1.0) - Hyperparameter optimization
 - **h5py** (~3.12.0) - HDF5 dataset storage
 - **wandb** (~0.19.6) - Experiment tracking
 - **PyYAML** (~6.0.1) - Configuration management
