@@ -98,7 +98,9 @@ extract_archives() {
     local pattern="$1"
     local tar_flags="$2"
     
-    for tar_file in ${pattern}; do
+    # Use find to robustly list matching files
+    find_files=$(find $(dirname "${pattern}") -maxdepth 1 -type f -name "$(basename "${pattern}")" 2>/dev/null)
+    for tar_file in ${find_files}; do
         if [[ ! -f "${tar_file}" ]]; then
             continue  # Skip if glob didn't match any files
         fi
