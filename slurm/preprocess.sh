@@ -150,9 +150,6 @@ data:
   # Optional: n_samples and n_images for limiting dataset size
   # n_samples: null
   # n_images: null
-  val_size: 0.15        # Fraction for validation set
-  test_size: 0.15       # Fraction for test set
-  knn_k: 512            # Number of nearest neighbours to store per target
 EOF
 
 echo "[$(date)] Configuration file created at ${CONFIG_FILE}"
