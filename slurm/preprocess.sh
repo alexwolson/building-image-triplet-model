@@ -99,10 +99,8 @@ FAILED_COUNT=0
 FAILED_FILES=()
 
 # Process .tar files
+shopt -s nullglob
 for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SOURCE_DIR}"/*.tgz; do
-    if [[ ! -f "${tar_file}" ]]; then
-        continue  # Skip if glob didn't match any files
-    fi
     
     filename=$(basename "${tar_file}")
     echo "[$(date)] Extracting ${filename}..."
