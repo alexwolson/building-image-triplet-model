@@ -24,7 +24,6 @@ The model uses **triplet loss** with adaptive difficulty sampling to learn robus
 - **Adaptive Difficulty Sampling**: Implements Upper Confidence Bound (UCB) algorithm to select challenging triplets during training
 - **Precomputed Embeddings**: Efficiently stores backbone features in HDF5 for fast training
 - **Flexible Backbones**: Supports any vision transformer or CNN from the `timm` library
-- **Hyperparameter Optimization**: Built-in Optuna integration for automated HPO
 - **PyTorch Lightning**: Clean, scalable training infrastructure
 - **Weights & Biases Integration**: Comprehensive experiment tracking and visualization
 
@@ -146,16 +145,6 @@ logging:
   offline: false                            # Disable W&B logging
 ```
 
-#### Optuna Hyperparameter Optimization
-```yaml
-optuna:
-  enabled: false                            # Enable Optuna HPO
-  storage: "sqlite:///optuna_studies/building_triplet.db"
-  study_name: "building_triplet_study"
-  project_name: "geo-triplet-optuna"        # W&B project for trials
-  group_name: null                          # W&B group name (optional)
-```
-
 #### Automatic Batch Size Finding
 ```yaml
 auto_batch_size:
@@ -238,39 +227,7 @@ This will:
 - **Adaptive Difficulty**: UCB-based triplet selection for optimal learning
 - **Checkpoint Management**: Automatic saving of best models
 
-### 3. Hyperparameter Optimization with Optuna
-
-For automated hyperparameter search:
-
-1. **Enable Optuna in config**:
-   ```yaml
-   optuna:
-     enabled: true
-     storage: "sqlite:///optuna_studies/building_triplet.db"
-     study_name: "building_triplet_study"
-     project_name: "geo-triplet-optuna"
-   ```
-
-2. **Run optimization**:
-   ```bash
-   uv run python -m building_image_triplet_model.train --config config.yaml
-   ```
-
-Optuna will:
-- Create multiple trials with different hyperparameters
-- Track each trial in W&B under `optuna.project_name`
-- Save study results to `optuna.storage`
-- Find optimal values for: learning rate, weight decay, embedding size, margin, etc.
-
-**Tuned Hyperparameters**:
-- Learning rate (log scale: 1e-5 to 1e-2)
-- Weight decay (log scale: 1e-6 to 1e-2)
-- Embedding size (categorical: 64, 128, 256, 512)
-- Triplet margin (uniform: 0.1 to 2.0)
-- Number of difficulty levels (int: 3 to 10)
-- UCB alpha (uniform: 0.5 to 5.0)
-
-### 4. Automatic Batch Size Finding
+### 3. Automatic Batch Size Finding
 
 To automatically find the largest batch size that fits in GPU memory:
 
@@ -453,7 +410,6 @@ Raw Images + Metadata
 | **PyTorch Lightning** | ~2.5.0 | Training infrastructure |
 | **timm** | ~1.0.15 | Vision model backbones |
 | **h5py** | ~3.12.0 | HDF5 dataset storage |
-| **Optuna** | ~4.1.0 | Hyperparameter optimization |
 | **wandb** | ~0.19.6 | Experiment tracking |
 | **PyYAML** | ~6.0.1 | Configuration management |
 | **NumPy** | ~2.2.2 | Numerical operations |

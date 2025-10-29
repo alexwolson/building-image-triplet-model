@@ -48,10 +48,3 @@ train:
   seed: 42
   warmup_epochs: 3
   weight_decay: 0.0001
-
-optuna:
-  enabled: false  # Set to true to enable Optuna hyperparameter optimization
-  storage: "sqlite:///optuna_studies/building_triplet.db"  # Optuna storage URL
-  study_name: "building_triplet_study"  # Optuna study name
-  project_name: "geo-triplet-optuna"  # W&B project name for Optuna trials
-  group_name: null  # Optional W&B group name
