@@ -8,12 +8,12 @@ import numpy as np
 import pandas as pd
 import psutil
 from scipy.spatial import distance as sdist
-import timm
 import torch
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
 
+from ..utils import create_backbone_model, get_backbone_output_size
 from .config import ProcessingConfig
 from .metadata import MetadataManager
 
@@ -43,17 +43,13 @@ class EmbeddingComputer:
         self.logger.info("Precomputing backbone embeddings...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Use timm directly to create the backbone model
-        backbone = timm.create_model(
-            self.config.feature_model, pretrained=True, num_classes=0
-        ).to(device)
-        backbone.eval()
+        # Create backbone model using shared utility
+        backbone = create_backbone_model(
+            self.config.feature_model, pretrained=True, device=device
+        )
 
-        # Get the actual backbone output size by running a dummy input through the backbone
-        dummy_input = torch.randn(1, 3, self.config.image_size, self.config.image_size).to(device)
-        with torch.no_grad():
-            backbone_output = backbone(dummy_input)
-            backbone_output_size = backbone_output.shape[1]
+        # Get the backbone output size using shared utility
+        backbone_output_size = get_backbone_output_size(self.config.feature_model)
 
         self.logger.info(f"Backbone output size: {backbone_output_size}")
 

@@ -5,10 +5,11 @@ Model definition for GeoTripletNet used in triplet training.
 from typing import Any, Optional
 
 from pytorch_lightning import LightningModule
-import timm
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+
+from .utils import get_backbone_output_size
 
 
 class GeoTripletNet(LightningModule):
@@ -50,21 +51,7 @@ class GeoTripletNet(LightningModule):
 
         # Always use precomputed embeddings - no backbone needed
         # Determine the backbone output size for the projection head
-        if backbone_output_size is not None:
-            # Use explicitly provided backbone output size from config
-            in_features = backbone_output_size
-        else:
-            # Dynamically determine backbone output size
-            temp_backbone = timm.create_model(backbone, pretrained=False, num_classes=0)
-            in_features = getattr(temp_backbone, "num_features", None)
-            if in_features is None:
-                # Try common fallback
-                in_features = getattr(getattr(temp_backbone, "head", None), "in_features", None)
-            if in_features is None:
-                raise ValueError(
-                    f"Could not determine in_features for backbone '{backbone}' when using precomputed embeddings."
-                )
-            del temp_backbone  # Clean up temporary model
+        in_features = get_backbone_output_size(backbone, backbone_output_size)
 
         # Projection head
         self.embedding: nn.Module = nn.Sequential(
