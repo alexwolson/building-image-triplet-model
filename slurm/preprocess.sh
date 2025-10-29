@@ -99,11 +99,10 @@ extract_archives() {
     shift
     local tar_flags=("$@")
     
-    # Use find to robustly list matching files
-    find_files=$(find "$(dirname "${pattern}")" -maxdepth 1 -type f -name "$(basename "${pattern}")" 2>/dev/null)
-    for tar_file in ${find_files}; do
+    # Use find to robustly list matching files and process with while loop
+    while IFS= read -r tar_file; do
         if [[ ! -f "${tar_file}" ]]; then
-            continue  # Skip if glob didn't match any files
+            continue  # Skip if not a valid file
         fi
         
         filename=$(basename "${tar_file}")
@@ -118,7 +117,7 @@ extract_archives() {
             FAILED_COUNT=$((FAILED_COUNT + 1))
             FAILED_FILES+=("${filename}")
         fi
-    done
+    done < <(find "$(dirname "${pattern}")" -maxdepth 1 -type f -name "$(basename "${pattern}")" 2>/dev/null)
 }
 
 # Loop through tar files with graceful error handling
@@ -127,9 +126,9 @@ FAILED_COUNT=0
 FAILED_FILES=()
 
 # Process all archive formats
-extract_archives "${TAR_SOURCE_DIR}/*.tar" -x -f
-extract_archives "${TAR_SOURCE_DIR}/*.tar.gz" -x -z -f
-extract_archives "${TAR_SOURCE_DIR}/*.tgz" -x -z -f
+extract_archives "${TAR_SOURCE_DIR}/*.tar" -xf
+extract_archives "${TAR_SOURCE_DIR}/*.tar.gz" -xzf
+extract_archives "${TAR_SOURCE_DIR}/*.tgz" -xzf
 
 echo ""
 echo "[$(date)] Extraction complete: ${EXTRACTED_COUNT} succeeded, ${FAILED_COUNT} failed"
