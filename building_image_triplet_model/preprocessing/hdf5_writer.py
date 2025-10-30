@@ -4,7 +4,6 @@ from concurrent.futures import ProcessPoolExecutor
 import gc
 from itertools import batched
 import logging
-import os
 from typing import List, Optional
 
 import h5py
@@ -12,6 +11,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from ..utils import get_tqdm_params
 from .config import ProcessingConfig
 from .image_validation import ImageValidator
 from .metadata import MetadataManager
@@ -91,8 +91,7 @@ class HDF5Writer:
             tqdm(
                 batched(metadata_df.iterrows(), self.config.batch_size),
                 total=(len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size,
-                desc="Processing batches",
-                disable=os.environ.get("SLURM_JOB_ID") is not None,
+                **get_tqdm_params("Processing batches"),
             )
         ):
             batch_df = pd.DataFrame([row for _, row in batch])

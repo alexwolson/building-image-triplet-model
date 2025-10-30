@@ -1,7 +1,6 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
-import os
 from typing import List, Tuple
 
 from PIL import Image
@@ -14,7 +13,7 @@ from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
 
-from ..utils import create_backbone_model, get_backbone_output_size
+from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_params
 from .config import ProcessingConfig
 from .metadata import MetadataManager
 
@@ -85,8 +84,7 @@ class EmbeddingComputer:
         for idx, row in tqdm(
             metadata_df.iterrows(),
             total=len(metadata_df),
-            desc="Generating embeddings",
-            disable=os.environ.get("SLURM_JOB_ID") is not None,
+            **get_tqdm_params("Generating embeddings"),
         ):
             img_path = metadata_manager.build_image_path(row)
             try:
