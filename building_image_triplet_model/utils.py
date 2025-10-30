@@ -4,6 +4,7 @@ Provides helper functions for working with vision backbone models (e.g., determi
 output dimensions, creating models for feature extraction).
 """
 
+import os
 from typing import Optional
 
 import timm
@@ -80,3 +81,26 @@ def create_backbone_model(
         backbone = backbone.to(device)
     backbone.eval()
     return backbone
+
+
+def get_tqdm_params(desc: str = "") -> dict:
+    """
+    Get tqdm parameters optimized for the current environment.
+
+    When running on a SLURM cluster, returns parameters for infrequent updates
+    to avoid excessive output. Otherwise, uses default tqdm behavior.
+
+    Args:
+        desc: Description string for the progress bar.
+
+    Returns:
+        Dictionary of parameters to pass to tqdm constructor.
+    """
+    params = {"desc": desc}
+
+    if os.environ.get("SLURM_JOB_ID") is not None:
+        # On cluster: use infrequent updates instead of disabling completely
+        params["mininterval"] = 60.0  # Update at most once per minute
+        params["maxinterval"] = 300.0  # Update at least once every 5 minutes
+
+    return params

@@ -1,7 +1,6 @@
 """Metadata parsing, caching, and data splitting utilities."""
 
 import logging
-import os
 from pathlib import Path
 import pickle
 from typing import Any, Dict, List, Optional
@@ -11,6 +10,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
+from ..utils import get_tqdm_params
 from .config import ProcessingConfig
 
 
@@ -212,7 +212,7 @@ class MetadataManager:
 
         self.logger.info("Starting to parse .txt metadata files...")
         for p in tqdm(
-            txt_files, desc="Parsing .txt metadata", disable=os.environ.get("SLURM_JOB_ID") is not None
+            txt_files, **get_tqdm_params("Parsing .txt metadata")
         ):
             rec = self._parse_txt_file(p)
             if rec is not None:
