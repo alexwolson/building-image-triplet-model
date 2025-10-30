@@ -6,7 +6,7 @@ auto_batch_size:
   mode: power     # Options: power, binsearch
 
 data:
-  # Path to the processed HDF5 dataset file
+  # Path to the processed HDF5 (Hierarchical Data Format) dataset file
   # Update this path to point to your dataset location
   hdf5_path: "data/processed/dataset.h5"
   
@@ -15,15 +15,15 @@ data:
   input_dir: "data/raw/images"
   
   # Training parameters
-  batch_size: 32
-  num_workers: 4
-  num_difficulty_levels: 5
-  ucb_alpha: 2.0
-  cache_size: 1000
+  batch_size: 32                  # Number of triplets per batch
+  num_workers: 4                  # Number of data loading workers
+  num_difficulty_levels: 5        # Number of distance-based difficulty buckets for triplet sampling
+  ucb_alpha: 2.0                  # UCB (Upper Confidence Bound) exploration parameter for difficulty selection
+  cache_size: 1000                # Number of embeddings to cache in memory
   
-  # Model configuration
-  feature_model: vit_pe_spatial_base_patch16_512.fb
-  image_size: 512
+  # Model configuration for preprocessing
+  feature_model: vit_pe_spatial_base_patch16_512.fb  # Backbone model for feature extraction
+  image_size: 512                 # Input image size for the backbone model
 
 logging:
   project_name: "geo-triplet-net"
@@ -40,11 +40,11 @@ model:
   backbone_output_size: null
 
 train:
-  difficulty_update_freq: 100
-  lr: 0.0001
-  max_epochs: 100
-  precision: 16-mixed
-  samples_per_epoch: 5000
-  seed: 42
-  warmup_epochs: 3
-  weight_decay: 0.0001
+  difficulty_update_freq: 100     # Update difficulty statistics every N batches
+  lr: 0.0001                      # Learning rate for optimizer (AdamW)
+  max_epochs: 100                 # Maximum number of training epochs
+  precision: 16-mixed             # Mixed precision training (16-bit for speed, 32-bit for stability)
+  samples_per_epoch: 5000         # Number of triplet samples per epoch
+  seed: 42                        # Random seed for reproducibility
+  warmup_epochs: 3                # Number of epochs for learning rate warmup
+  weight_decay: 0.0001            # L2 regularization weight decay

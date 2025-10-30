@@ -1,5 +1,8 @@
 """
 Model definition for GeoTripletNet used in triplet training.
+
+"Geo" refers to Geographic - the model learns embeddings based on geographic similarity
+of building locations using latitude/longitude coordinates.
 """
 
 from typing import Any, Optional
@@ -14,7 +17,10 @@ from .utils import get_backbone_output_size
 
 class GeoTripletNet(LightningModule):
     """
-    PyTorch Lightning module for geographical triplet network.
+    PyTorch Lightning module for geographic triplet network.
+
+    "Geo" refers to Geographic - this network learns to embed building images into a metric
+    space where geographically similar buildings (from the same location) are closer together.
 
     This model operates on precomputed backbone embeddings rather than raw images.
     It consists of a projection head that maps backbone features to a lower-dimensional

@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TripletDifficulty:
     """
-    Tracks and updates triplet difficulty levels based on log-distance.
+    Tracks and updates triplet difficulty levels based on log-distance between buildings.
+
+    Manages statistics for difficulty bands defined by geographic distance ranges.
+    Used in UCB (Upper Confidence Bound) sampling to balance exploration and exploitation
+    when selecting negative samples during triplet training.
     """
 
     min_distance: float
@@ -26,8 +30,17 @@ class TripletDifficulty:
     def update(self, loss: float, threshold: float = 0.3) -> bool:
         """
         Update the success rate using the specified threshold.
+
         If loss < threshold => "success" (good triplet, model performing well).
-        UCB will then prefer difficulties with LOW success_rate (high loss, challenging).
+        UCB (Upper Confidence Bound) will then prefer difficulties with LOW success_rate
+        (high loss, challenging) to focus learning on harder examples.
+
+        Args:
+            loss: Current triplet loss value.
+            threshold: Success threshold (default: 0.3).
+
+        Returns:
+            True if loss < threshold (successful triplet), False otherwise.
         """
         success = loss < threshold
         self.success_rate = (self.success_rate * self.num_attempts + float(success)) / (
@@ -39,7 +52,15 @@ class TripletDifficulty:
 
 class GeoTripletDataset(Dataset):
     """
-    PyTorch Dataset for triplet sampling using a precomputed log-distance matrix.
+    PyTorch Dataset for geographic triplet sampling.
+
+    "Geo" refers to Geographic - samples triplets (anchor, positive, negative) of building
+    images where similarity is defined by geographic proximity of building locations.
+
+    Uses adaptive difficulty sampling via UCB (Upper Confidence Bound) to balance exploration
+    and exploitation when selecting negatives from different distance ranges. Precomputed
+    embeddings and KNN (K-Nearest Neighbors) indices are loaded from HDF5 (Hierarchical
+    Data Format) for efficient sampling.
     """
 
     def __init__(
@@ -52,6 +73,20 @@ class GeoTripletDataset(Dataset):
         transform: Optional[Any] = None,
         difficulty_update_window: int = 32,
     ):
+        """
+        Initialize GeoTripletDataset.
+
+        Args:
+            hdf5_path: Path to HDF5 (Hierarchical Data Format) file containing embeddings.
+            split: Dataset split ('train', 'val', or 'test').
+            num_difficulty_levels: Number of distance-based difficulty bands.
+            ucb_alpha: UCB (Upper Confidence Bound) exploration parameter for difficulty
+                selection. Higher values encourage more exploration of under-sampled
+                difficulty levels.
+            cache_size: Number of embeddings to cache in memory.
+            transform: Optional transform to apply to samples (unused with precomputed embeddings).
+            difficulty_update_window: Window size for tracking recent difficulty selections.
+        """
         logger.info(f"Initializing GeoTripletDataset for split='{split}'...")
         self.hdf5_path = hdf5_path
         self.h5_file = None
@@ -173,7 +208,17 @@ class GeoTripletDataset(Dataset):
         return levels
 
     def _select_difficulty_level(self) -> TripletDifficulty:
-        """Select a difficulty level using UCB balancing exploration and exploitation."""
+        """
+        Select a difficulty level using UCB (Upper Confidence Bound).
+
+        Balances exploration (trying under-sampled difficulties) and exploitation
+        (using difficulties with low success rates, i.e., high loss). The UCB algorithm
+        encourages selecting challenging triplets while ensuring all difficulty levels
+        are adequately explored.
+
+        Returns:
+            Selected TripletDifficulty level for negative sampling.
+        """
         total_attempts = sum(max(1, lvl.num_attempts) for lvl in self.difficulty_levels)
         scores = [
             (1.0 - lvl.success_rate)
@@ -184,8 +229,16 @@ class GeoTripletDataset(Dataset):
 
     def _get_distance_row(self, anchor_row: int) -> np.ndarray:
         """
-        Return a synthetic full-distance row using KNN distances.
-        Non-stored entries are +inf.
+        Return a synthetic full-distance row using KNN (K-Nearest Neighbors) distances.
+
+        Non-stored entries (beyond K nearest neighbors) are set to +inf to indicate
+        they are not candidates for negative sampling at this distance range.
+
+        Args:
+            anchor_row: Row index in the target distance matrix.
+
+        Returns:
+            Distance array with KNN distances filled in, rest as infinity.
         """
         if anchor_row in self.row_cache:
             return self.row_cache[anchor_row]

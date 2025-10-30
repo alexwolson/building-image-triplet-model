@@ -1,5 +1,8 @@
 """
 Data module definition for GeoTripletDataModule used in triplet training.
+
+"Geo" refers to Geographic - manages datasets for geographic triplet learning where
+samples are organized based on building locations (latitude/longitude).
 """
 
 import logging
@@ -15,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 class GeoTripletDataModule(LightningDataModule):
     """
-    PyTorch Lightning DataModule for geographical triplet dataset.
+    PyTorch Lightning DataModule for geographic triplet dataset.
+
+    "Geo" refers to Geographic - manages data loading for triplet networks that learn
+    from geographic relationships between building locations.
     """
 
     def __init__(

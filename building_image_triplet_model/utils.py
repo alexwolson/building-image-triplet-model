@@ -1,4 +1,8 @@
-"""Utility functions for building-image-triplet-model."""
+"""Utility functions for building-image-triplet-model.
+
+Provides helper functions for working with vision backbone models (e.g., determining
+output dimensions, creating models for feature extraction).
+"""
 
 from typing import Optional
 
