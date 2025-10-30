@@ -100,15 +100,15 @@ class MetadataManager:
             self.logger.info(
                 f"Applying n_samples filtering (n_samples={self.config.n_samples})..."
             )
-            unique_tids = np.array(sorted(df["TargetID"].unique()))
-            if self.config.n_samples < len(unique_tids):
+            unique_target_ids = np.array(sorted(df["TargetID"].unique()))
+            if self.config.n_samples < len(unique_target_ids):
                 rng = np.random.default_rng(seed=42)
-                sampled_tids = set(
-                    rng.choice(unique_tids, size=self.config.n_samples, replace=False)
+                sampled_target_ids = set(
+                    rng.choice(unique_target_ids, size=self.config.n_samples, replace=False)
                 )
-                df = df[df["TargetID"].isin(sampled_tids)].reset_index(drop=True)
+                df = df[df["TargetID"].isin(sampled_target_ids)].reset_index(drop=True)
                 self.logger.info(
-                    f"Downsampled to {len(df)} rows across {len(sampled_tids)} "
+                    f"Downsampled to {len(df)} rows across {len(sampled_target_ids)} "
                     f"TargetIDs (n_samples={self.config.n_samples})."
                 )
 
@@ -152,7 +152,7 @@ class MetadataManager:
                     f"Insufficient fields in 'd' line ({len(parts)} parts): {txt_path}"
                 )
                 return None
-            _, ds_id_str, tgt_id_str, patch_id_str, sv_id_str, *rest = parts
+            _, dataset_id_str, target_id_str, patch_id_str, streetview_id_str, *rest = parts
             # Extract target point (lat, lon, height)
             if len(rest) < 3:
                 self.logger.debug(f"Insufficient coordinate data in: {txt_path}")
@@ -172,10 +172,10 @@ class MetadataManager:
                 self.logger.debug(f"No paired image found for: {txt_path}")
                 return None
             return {
-                "DatasetID": int(ds_id_str),
-                "TargetID": int(tgt_id_str),
+                "DatasetID": int(dataset_id_str),
+                "TargetID": int(target_id_str),
                 "PatchID": int(patch_id_str),
-                "StreetViewID": int(sv_id_str),
+                "StreetViewID": int(streetview_id_str),
                 "Image filename": image_filename,
                 "Subpath": subpath,
                 "Target Point Latitude": target_lat,

@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TripletDifficulty:
     """
-    Tracks and updates triplet difficulty levels based on log-distance.
+    Tracks and updates triplet difficulty levels based on log-distance between buildings.
+
+    Manages statistics for difficulty bands defined by geographic distance ranges.
+    Used in UCB (Upper Confidence Bound) sampling to balance exploration and exploitation
+    when selecting negative samples during triplet training.
     """
 
     min_distance: float
@@ -26,8 +30,17 @@ class TripletDifficulty:
     def update(self, loss: float, threshold: float = 0.3) -> bool:
         """
         Update the success rate using the specified threshold.
+
         If loss < threshold => "success" (good triplet, model performing well).
-        UCB will then prefer difficulties with LOW success_rate (high loss, challenging).
+        UCB (Upper Confidence Bound) will then prefer difficulties with LOW success_rate
+        (high loss, challenging) to focus learning on harder examples.
+
+        Args:
+            loss: Current triplet loss value.
+            threshold: Success threshold (default: 0.3).
+
+        Returns:
+            True if loss < threshold (successful triplet), False otherwise.
         """
         success = loss < threshold
         self.success_rate = (self.success_rate * self.num_attempts + float(success)) / (
@@ -39,7 +52,15 @@ class TripletDifficulty:
 
 class GeoTripletDataset(Dataset):
     """
-    PyTorch Dataset for triplet sampling using a precomputed log-distance matrix.
+    PyTorch Dataset for geographic triplet sampling.
+
+    "Geo" refers to Geographic - samples triplets (anchor, positive, negative) of building
+    images where similarity is defined by geographic proximity of building locations.
+
+    Uses adaptive difficulty sampling via UCB (Upper Confidence Bound) to balance exploration
+    and exploitation when selecting negatives from different distance ranges. Precomputed
+    embeddings and KNN (K-Nearest Neighbors) indices are loaded from HDF5 (Hierarchical
+    Data Format) for efficient sampling.
     """
 
     def __init__(
@@ -52,6 +73,20 @@ class GeoTripletDataset(Dataset):
         transform: Optional[Any] = None,
         difficulty_update_window: int = 32,
     ):
+        """
+        Initialize GeoTripletDataset.
+
+        Args:
+            hdf5_path: Path to HDF5 (Hierarchical Data Format) file containing embeddings.
+            split: Dataset split ('train', 'val', or 'test').
+            num_difficulty_levels: Number of distance-based difficulty bands.
+            ucb_alpha: UCB (Upper Confidence Bound) exploration parameter for difficulty
+                selection. Higher values encourage more exploration of under-sampled
+                difficulty levels.
+            cache_size: Number of embeddings to cache in memory.
+            transform: Optional transform to apply to samples (unused with precomputed embeddings).
+            difficulty_update_window: Window size for tracking recent difficulty selections.
+        """
         logger.info(f"Initializing GeoTripletDataset for split='{split}'...")
         self.hdf5_path = hdf5_path
         self.h5_file = None
@@ -101,7 +136,7 @@ class GeoTripletDataset(Dataset):
         logger.info(
             f"Loaded KNN distance tables '{knn_idx_key}/{knn_dist_key}' for split='{split}'."
         )
-        self.tid_to_row = {tid: i for i, tid in enumerate(self.target_id_order)}
+        self.target_id_to_row = {target_id: i for i, target_id in enumerate(self.target_id_order)}
         split_targets = set(np.array(self.h5_file["splits"][split][:]))
         all_valid_indices = np.array(self.h5_file["images"]["valid_indices"][:])
         all_target_ids = np.array(self.h5_file["metadata"]["TargetID"][:])
@@ -173,7 +208,17 @@ class GeoTripletDataset(Dataset):
         return levels
 
     def _select_difficulty_level(self) -> TripletDifficulty:
-        """Select a difficulty level using UCB balancing exploration and exploitation."""
+        """
+        Select a difficulty level using UCB (Upper Confidence Bound).
+
+        Balances exploration (trying under-sampled difficulties) and exploitation
+        (using difficulties with low success rates, i.e., high loss). The UCB algorithm
+        encourages selecting challenging triplets while ensuring all difficulty levels
+        are adequately explored.
+
+        Returns:
+            Selected TripletDifficulty level for negative sampling.
+        """
         total_attempts = sum(max(1, lvl.num_attempts) for lvl in self.difficulty_levels)
         scores = [
             (1.0 - lvl.success_rate)
@@ -184,8 +229,16 @@ class GeoTripletDataset(Dataset):
 
     def _get_distance_row(self, anchor_row: int) -> np.ndarray:
         """
-        Return a synthetic full-distance row using KNN distances.
-        Non-stored entries are +inf.
+        Return a synthetic full-distance row using KNN (K-Nearest Neighbors) distances.
+
+        Non-stored entries (beyond K nearest neighbors) are set to +inf to indicate
+        they are not candidates for negative sampling at this distance range.
+
+        Args:
+            anchor_row: Row index in the target distance matrix.
+
+        Returns:
+            Distance array with KNN distances filled in, rest as infinity.
         """
         if anchor_row in self.row_cache:
             return self.row_cache[anchor_row]
@@ -225,8 +278,8 @@ class GeoTripletDataset(Dataset):
         self, anchor_idx: int, difficulty: TripletDifficulty
     ) -> Optional[int]:
         """Find a negative sample in the given log-dist band, or return None."""
-        anchor_tid = self.target_ids[anchor_idx]
-        anchor_row = self.tid_to_row[anchor_tid]
+        anchor_target_id = self.target_ids[anchor_idx]
+        anchor_row = self.target_id_to_row[anchor_target_id]
         row_of_diffs = self._get_distance_row(anchor_row)
         mask = (row_of_diffs >= difficulty.min_distance) & (
             row_of_diffs <= difficulty.max_distance
@@ -237,18 +290,18 @@ class GeoTripletDataset(Dataset):
         if len(candidate_rows) == 0:
             return None
         # Exclude the anchor's own TargetID to guarantee a true negative.
-        valid_tids = [
+        valid_target_ids = [
             self.target_id_order[row_idx]
             for row_idx in candidate_rows
             if (
-                self.target_id_order[row_idx] != anchor_tid
+                self.target_id_order[row_idx] != anchor_target_id
                 and self.target_id_order[row_idx] in self.target_to_indices
             )
         ]
-        if not valid_tids:
+        if not valid_target_ids:
             return None
-        chosen_tid = self.rng.choice(valid_tids)
-        neg_candidates = self.target_to_indices[chosen_tid]
+        chosen_target_id = self.rng.choice(valid_target_ids)
+        neg_candidates = self.target_to_indices[chosen_target_id]
         neg_local_index = int(self.rng.choice(neg_candidates))
         return neg_local_index
 
@@ -286,16 +339,16 @@ class GeoTripletDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return (anchor_img, positive_img, negative_img) as torch Tensors."""
         anchor_idx = idx % len(self.valid_indices)
-        anchor_tid = self.target_ids[anchor_idx]
-        positive_candidates = [i for i in self.target_to_indices[anchor_tid] if i != anchor_idx]
+        anchor_target_id = self.target_ids[anchor_idx]
+        positive_candidates = [i for i in self.target_to_indices[anchor_target_id] if i != anchor_idx]
         if not positive_candidates:
             positive_idx = anchor_idx
         else:
             positive_idx = self.rng.choice(positive_candidates)
         negative_idx, difficulty_level = self._get_negative_sample(anchor_idx)
         # Safety guard: ensure the negative comes from a different TargetID.
-        if self.target_ids[negative_idx] == anchor_tid:
-            diff_indices = np.where(self.target_ids != anchor_tid)[0]
+        if self.target_ids[negative_idx] == anchor_target_id:
+            diff_indices = np.where(self.target_ids != anchor_target_id)[0]
             if len(diff_indices) == 0:
                 # As a last resort (all belong to same class), keep original index.
                 logger.warning("All samples share the same TargetID; using anchor as negative.")
