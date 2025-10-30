@@ -136,7 +136,7 @@ class GeoTripletDataset(Dataset):
         logger.info(
             f"Loaded KNN distance tables '{knn_idx_key}/{knn_dist_key}' for split='{split}'."
         )
-        self.tid_to_row = {tid: i for i, tid in enumerate(self.target_id_order)}
+        self.target_id_to_row = {target_id: i for i, target_id in enumerate(self.target_id_order)}
         split_targets = set(np.array(self.h5_file["splits"][split][:]))
         all_valid_indices = np.array(self.h5_file["images"]["valid_indices"][:])
         all_target_ids = np.array(self.h5_file["metadata"]["TargetID"][:])
@@ -278,8 +278,8 @@ class GeoTripletDataset(Dataset):
         self, anchor_idx: int, difficulty: TripletDifficulty
     ) -> Optional[int]:
         """Find a negative sample in the given log-dist band, or return None."""
-        anchor_tid = self.target_ids[anchor_idx]
-        anchor_row = self.tid_to_row[anchor_tid]
+        anchor_target_id = self.target_ids[anchor_idx]
+        anchor_row = self.target_id_to_row[anchor_target_id]
         row_of_diffs = self._get_distance_row(anchor_row)
         mask = (row_of_diffs >= difficulty.min_distance) & (
             row_of_diffs <= difficulty.max_distance
@@ -290,18 +290,18 @@ class GeoTripletDataset(Dataset):
         if len(candidate_rows) == 0:
             return None
         # Exclude the anchor's own TargetID to guarantee a true negative.
-        valid_tids = [
+        valid_target_ids = [
             self.target_id_order[row_idx]
             for row_idx in candidate_rows
             if (
-                self.target_id_order[row_idx] != anchor_tid
+                self.target_id_order[row_idx] != anchor_target_id
                 and self.target_id_order[row_idx] in self.target_to_indices
             )
         ]
-        if not valid_tids:
+        if not valid_target_ids:
             return None
-        chosen_tid = self.rng.choice(valid_tids)
-        neg_candidates = self.target_to_indices[chosen_tid]
+        chosen_target_id = self.rng.choice(valid_target_ids)
+        neg_candidates = self.target_to_indices[chosen_target_id]
         neg_local_index = int(self.rng.choice(neg_candidates))
         return neg_local_index
 
@@ -339,16 +339,16 @@ class GeoTripletDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return (anchor_img, positive_img, negative_img) as torch Tensors."""
         anchor_idx = idx % len(self.valid_indices)
-        anchor_tid = self.target_ids[anchor_idx]
-        positive_candidates = [i for i in self.target_to_indices[anchor_tid] if i != anchor_idx]
+        anchor_target_id = self.target_ids[anchor_idx]
+        positive_candidates = [i for i in self.target_to_indices[anchor_target_id] if i != anchor_idx]
         if not positive_candidates:
             positive_idx = anchor_idx
         else:
             positive_idx = self.rng.choice(positive_candidates)
         negative_idx, difficulty_level = self._get_negative_sample(anchor_idx)
         # Safety guard: ensure the negative comes from a different TargetID.
-        if self.target_ids[negative_idx] == anchor_tid:
-            diff_indices = np.where(self.target_ids != anchor_tid)[0]
+        if self.target_ids[negative_idx] == anchor_target_id:
+            diff_indices = np.where(self.target_ids != anchor_target_id)[0]
             if len(diff_indices) == 0:
                 # As a last resort (all belong to same class), keep original index.
                 logger.warning("All samples share the same TargetID; using anchor as negative.")
