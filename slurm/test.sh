@@ -13,7 +13,8 @@ set -euo pipefail
 
 echo "Starting test job on $(hostname) at $(date)"
 
-module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
+# Suppress Lmod informational messages
+module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 cd "${SLURM_TMPDIR}"
 
@@ -33,6 +34,9 @@ if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
 fi
+
+# Suppress UV hardlink warning (common on cluster filesystems)
+export UV_LINK_MODE=copy
 
 # Copy project to scratch and set up with uv
 PROJECT_DIR=$SLURM_TMPDIR/building-image-triplet-model
