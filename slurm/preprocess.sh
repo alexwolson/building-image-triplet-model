@@ -22,8 +22,8 @@ echo "Starting preprocessing job on $(hostname) at $(date)"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "=========================================="
 
-# Load modules (Nibi cluster)
-module load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
+# Load modules (Nibi cluster) - suppress Lmod informational messages
+module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 # Define paths
 TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/dataset_unaligned"
@@ -54,6 +54,9 @@ if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
 fi
+
+# Suppress UV hardlink warning (common on cluster filesystems)
+export UV_LINK_MODE=copy
 
 # Copy project to SLURM_TMPDIR
 echo "[$(date)] Copying project to ${PROJECT_DIR}..."
