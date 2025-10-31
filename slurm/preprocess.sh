@@ -4,7 +4,7 @@
 #SBATCH --gpus-per-node=1              # GPU needed for backbone embedding computation
 #SBATCH --cpus-per-task=8              # 8 cores for parallel image processing (adjust based on num_workers)
 #SBATCH --mem=32G                      # 32GB for loading images and embeddings in memory
-#SBATCH --time=24:00:00                # 24 hours (preprocessing can be long-running)
+#SBATCH --time=72:00:00                # 72 hours (preprocessing can be long-running)
 #SBATCH --output=slurm-preprocess-%j.out  # Job output log
 #SBATCH --error=slurm-preprocess-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
@@ -101,10 +101,10 @@ FAILED_FILES=()
 # Process .tar files
 shopt -s nullglob
 for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SOURCE_DIR}"/*.tgz; do
-    
+
     filename=$(basename "${tar_file}")
     echo "[$(date)] Extracting ${filename}..."
-    
+
     # Extract with error handling - continue on failure
     if tar -xf "${tar_file}" 2>&1; then
         echo "[$(date)] Successfully extracted ${filename}"
