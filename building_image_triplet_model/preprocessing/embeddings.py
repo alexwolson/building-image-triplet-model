@@ -113,7 +113,21 @@ class BackboneInferenceModule(LightningModule):
             return self.backbone(x)
 
     def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
-        """Prediction step returns embeddings and indices, handling invalid images."""
+        """
+        Perform a prediction step to compute embeddings for a batch of images.
+
+        Args:
+            batch: A tuple containing (images, indices, is_valid), where
+                images (torch.Tensor): Batch of input images.
+                indices (torch.Tensor): Indices of the images in the dataset.
+                is_valid (torch.Tensor): Boolean mask indicating valid images.
+            batch_idx: Index of the current batch.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary with keys:
+                - "embeddings": The computed embeddings for the batch (zero for invalid images).
+                - "indices": The indices of the images in the batch.
+        """
         images, indices, is_valid = batch
         
         # Only process valid images through backbone
