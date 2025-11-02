@@ -1,6 +1,5 @@
 """Tests for preprocessing functionality including multi-GPU support."""
 
-import tempfile
 from pathlib import Path
 
 import h5py
