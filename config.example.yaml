@@ -29,6 +29,7 @@ data:
   devices: "auto"                 # Number of GPUs to use for preprocessing ("auto", 1, 2, etc.)
   accelerator: "auto"             # Device type ("auto", "cuda", "cpu")
   strategy: "auto"                # Multi-GPU strategy ("auto", "ddp", "ddp_spawn")
+  use_legacy_preprocessing: false # Set to true to use the old single-GPU method (for debugging)
 
 logging:
   project_name: "geo-triplet-net"
