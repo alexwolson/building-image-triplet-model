@@ -124,7 +124,7 @@ class HDF5Writer:
                 current_idx += len(processed_images)
                 del processed_images
 
-                # Log resource usage periodically
+                # Log resource usage and perform garbage collection periodically
                 if batch_idx % 100 == 0:
                     try:
                         process = psutil.Process()
@@ -137,9 +137,6 @@ class HDF5Writer:
                         )
                     except Exception:
                         pass  # Silently skip if psutil not available
-
-                # Periodic garbage collection
-                if batch_idx % 100 == 0:
                     gc.collect()
         finally:
             # Ensure executor is properly shut down
