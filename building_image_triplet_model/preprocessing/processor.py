@@ -63,7 +63,7 @@ class DatasetProcessor:
             # ------------------------------------------------------------------
             all_targets, geo_embeddings = embedding_computer.compute_geo_embeddings(metadata_df)
 
-            # Precompute backbone embeddings (always required now)
+            # Precompute backbone embeddings using PyTorch Lightning multi-GPU support
             embedding_computer.precompute_backbone_embeddings(h5_file, metadata_df)
 
             # ------------------------------------------------------------------

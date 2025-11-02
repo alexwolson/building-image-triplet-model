@@ -1,14 +1,17 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from PIL import Image
 import numpy as np
 import pandas as pd
 import psutil
+from pytorch_lightning import LightningDataModule, LightningModule, Trainer
+from pytorch_lightning.callbacks import BasePredictionWriter
 from scipy.spatial import distance as sdist
 import torch
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
@@ -16,6 +19,154 @@ from tqdm import tqdm
 from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_params
 from .config import ProcessingConfig
 from .metadata import MetadataManager
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+
+class ImageEmbeddingDataset(Dataset):
+    """Dataset for loading images for embedding computation."""
+
+    def __init__(self, metadata_df: pd.DataFrame, config: ProcessingConfig):
+        self.metadata_df = metadata_df
+        self.config = config
+        self.metadata_manager = MetadataManager(config)
+        self.failed_indices = set()  # Track indices of failed images
+
+        # Image transformations
+        self.transform = transforms.Compose(
+            [
+                transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
+                transforms.Resize((config.image_size, config.image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
+
+    def __len__(self) -> int:
+        return len(self.metadata_df)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, bool]:
+        """Return (image_tensor, index, is_valid) tuple."""
+        row = self.metadata_df.iloc[idx]
+        img_path = self.metadata_manager.build_image_path(row)
+
+        try:
+            with Image.open(img_path) as im:
+                tensor_img = self.transform(im.convert("RGB"))
+            return tensor_img, idx, True
+        except (FileNotFoundError, OSError, IOError) as e:
+            # Return zero tensor for missing or corrupted images
+            # Mark this as invalid so we can skip backbone processing
+            logger.warning(f"Skipping image {img_path} due to error: {e}")
+            self.failed_indices.add(idx)
+            zero_tensor = torch.zeros(3, self.config.image_size, self.config.image_size)
+            return zero_tensor, idx, False
+
+
+class ImageEmbeddingDataModule(LightningDataModule):
+    """DataModule for loading images during embedding computation."""
+
+    def __init__(self, metadata_df: pd.DataFrame, config: ProcessingConfig):
+        super().__init__()
+        self.metadata_df = metadata_df
+        self.config = config
+        self.dataset = None
+
+    def setup(self, stage: str | None = None) -> None:
+        """Set up the dataset."""
+        self.dataset = ImageEmbeddingDataset(self.metadata_df, self.config)
+
+    def predict_dataloader(self) -> DataLoader:
+        """Return dataloader for prediction/inference."""
+        return DataLoader(
+            self.dataset,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            shuffle=False,  # Important: maintain order for correct indexing
+            pin_memory=True,
+            persistent_workers=self.config.num_workers > 0,
+        )
+
+
+class BackboneInferenceModule(LightningModule):
+    """Lightning module for backbone inference (forward pass only)."""
+
+    def __init__(self, config: ProcessingConfig):
+        super().__init__()
+        self.config = config
+
+        # Create backbone model
+        self.backbone = create_backbone_model(
+            config.feature_model, pretrained=True, device=None  # Lightning handles device
+        )
+        self.backbone.eval()
+
+        # Get backbone output size
+        self.backbone_output_size = get_backbone_output_size(
+            config.feature_model, backbone_model=self.backbone
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through backbone."""
+        with torch.no_grad():
+            return self.backbone(x)
+
+    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
+        """
+        Perform a prediction step to compute embeddings for a batch of images.
+
+        Args:
+            batch: A tuple containing (images, indices, is_valid), where
+                images (torch.Tensor): Batch of input images.
+                indices (torch.Tensor): Indices of the images in the dataset.
+                is_valid (torch.Tensor): Boolean mask indicating valid images.
+            batch_idx: Index of the current batch.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary with keys:
+                - "embeddings": The computed embeddings for the batch (zero for invalid images).
+                - "indices": The indices of the images in the batch.
+        """
+        images, indices, is_valid = batch
+        
+        # Only process valid images through backbone
+        # For invalid images, return zero embeddings directly
+        embeddings = torch.zeros(
+            images.shape[0], self.backbone_output_size, device=images.device
+        )
+        
+        if is_valid.any():
+            valid_mask = is_valid.bool()
+            valid_images = images[valid_mask]
+            embeddings[valid_mask] = self(valid_images)
+        
+        return {"embeddings": embeddings.cpu(), "indices": indices.cpu()}
+
+
+class HDF5PredictionWriter(BasePredictionWriter):
+    """Writes predictions directly to HDF5 to avoid memory accumulation."""
+
+    def __init__(self, embeddings_ds, write_interval: str = "batch"):
+        super().__init__(write_interval)
+        self.embeddings_ds = embeddings_ds
+        self.batches_written = 0
+
+    def write_on_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        prediction: Any,
+        batch_indices: List[int],
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        """Write each batch directly to HDF5 as it's computed."""
+        indices = prediction["indices"].numpy()
+        embeddings = prediction["embeddings"].numpy()
+        self.embeddings_ds[indices] = embeddings
+        self.batches_written += 1
 
 
 class EmbeddingComputer:
@@ -39,25 +190,21 @@ class EmbeddingComputer:
         return targets, embeddings
 
     def precompute_backbone_embeddings(self, h5_file, metadata_df: pd.DataFrame) -> None:
-        """Precompute backbone embeddings and store in HDF5."""
+        """Precompute backbone embeddings using PyTorch Lightning multi-GPU support."""
         self.logger.info("Precomputing backbone embeddings...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Create backbone model using shared utility
-        backbone = create_backbone_model(
-            self.config.feature_model, pretrained=True, device=device
-        )
+        # Create Lightning module and datamodule
+        lightning_module = BackboneInferenceModule(self.config)
+        data_module = ImageEmbeddingDataModule(metadata_df, self.config)
 
-        # Get the backbone output size from the created model
-        backbone_output_size = get_backbone_output_size(
-            self.config.feature_model, backbone_model=backbone
-        )
-
+        # Get backbone output size
+        backbone_output_size = lightning_module.backbone_output_size
         self.logger.info(f"Backbone output size: {backbone_output_size}")
 
-        # Store the backbone output size in the HDF5 file for future reference
+        # Store the backbone output size in the HDF5 file
         h5_file.attrs["backbone_output_size"] = backbone_output_size
 
+        # Create HDF5 dataset for embeddings
         embeddings_shape = (len(metadata_df), backbone_output_size)
         embeddings_ds = h5_file.create_dataset(
             "backbone_embeddings",
@@ -66,55 +213,37 @@ class EmbeddingComputer:
             compression="lzf",
         )
 
-        # Prepare image transformations for the model
-        prep = transforms.Compose(
-            [
-                transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
-                transforms.Resize((self.config.image_size, self.config.image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ]
+        # Create prediction writer to stream results directly to HDF5
+        # This avoids accumulating all predictions in memory
+        pred_writer = HDF5PredictionWriter(embeddings_ds, write_interval="batch")
+
+        # Configure trainer for multi-GPU inference
+        trainer = Trainer(
+            accelerator=self.config.accelerator,
+            devices=self.config.devices,
+            strategy=self.config.strategy,
+            logger=False,  # Disable logging for inference
+            enable_checkpointing=False,
+            enable_progress_bar=True,
+            enable_model_summary=False,
+            callbacks=[pred_writer],
         )
 
-        batch_imgs: List[torch.Tensor] = []
-        batch_indices: List[int] = []
+        # Run predictions - results are written directly to HDF5 by the callback
+        self.logger.info("Running backbone inference...")
+        trainer.predict(lightning_module, datamodule=data_module)
 
-        metadata_manager = MetadataManager(self.config)
+        # Verify predictions were written
+        if pred_writer.batches_written == 0:
+            raise RuntimeError(
+                "No embeddings were computed. Check that the dataset is not empty "
+                "and that images can be loaded successfully."
+            )
 
-        for idx, row in tqdm(
-            metadata_df.iterrows(),
-            total=len(metadata_df),
-            **get_tqdm_params("Generating embeddings"),
-        ):
-            img_path = metadata_manager.build_image_path(row)
-            try:
-                with Image.open(img_path) as im:
-                    tensor_img = prep(im.convert("RGB"))
-                    batch_imgs.append(tensor_img)
-                    batch_indices.append(idx)
-
-                if len(batch_imgs) == self.config.batch_size:
-                    with torch.no_grad():
-                        out = backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
-                    embeddings_ds[batch_indices] = out
-                    batch_imgs, batch_indices = [], []
-                    # Clear GPU cache after each batch
-                    if device == "cuda":
-                        torch.cuda.empty_cache()
-            except Exception as e:
-                self.logger.warning(f"Skipping image {img_path} due to error: {e}")
-                # Store a zero vector for problematic images
-                embeddings_ds[idx] = np.zeros(backbone_output_size, dtype=np.float32)
-
-        # Process any remaining images in the last batch
-        if batch_imgs:
-            with torch.no_grad():
-                out = backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
-            embeddings_ds[batch_indices] = out
-            # Clear GPU cache after final batch
-            if device == "cuda":
-                torch.cuda.empty_cache()
-        self.logger.info("Backbone embeddings precomputed and stored.")
+        self.logger.info(
+            f"Backbone embeddings precomputed and stored "
+            f"({pred_writer.batches_written} batches written)."
+        )
 
     def compute_and_store_difficulty_scores_for_split(
         self,
