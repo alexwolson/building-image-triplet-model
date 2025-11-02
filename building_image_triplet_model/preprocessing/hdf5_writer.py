@@ -17,6 +17,14 @@ from .config import ProcessingConfig
 from .image_validation import ImageValidator
 from .metadata import MetadataManager
 
+# Worker pool recycling interval to prevent long-term resource accumulation
+# After processing this many batches, the process pool is shut down and recreated
+EXECUTOR_RECYCLE_INTERVAL = 1000
+
+# Resource monitoring interval for logging memory usage and file descriptors
+# Log resource usage every N batches to track system health during processing
+RESOURCE_LOG_INTERVAL = 100
+
 
 class HDF5Writer:
     """Handles HDF5 file operations for dataset storage."""
@@ -89,9 +97,6 @@ class HDF5Writer:
         current_idx = 0  # Global row counter in metadata_df order
         valid_indices: List[int] = []
 
-        # Recycle worker pool every N batches to prevent resource accumulation
-        recycle_interval = 1000
-
         total_batches = (len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size
 
         # Create initial executor
@@ -106,7 +111,7 @@ class HDF5Writer:
                 )
             ):
                 # Recycle executor periodically to prevent resource leaks
-                if batch_idx > 0 and batch_idx % recycle_interval == 0:
+                if batch_idx > 0 and batch_idx % EXECUTOR_RECYCLE_INTERVAL == 0:
                     self.logger.info(
                         f"Recycling worker pool at batch {batch_idx}/{total_batches} "
                         f"to prevent resource accumulation"
@@ -125,7 +130,7 @@ class HDF5Writer:
                 del processed_images
 
                 # Log resource usage and perform garbage collection periodically
-                if batch_idx % 100 == 0:
+                if batch_idx % RESOURCE_LOG_INTERVAL == 0:
                     try:
                         process = psutil.Process()
                         mem_gb = process.memory_info().rss / (1024**3)

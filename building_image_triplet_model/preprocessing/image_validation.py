@@ -28,6 +28,8 @@ class ImageValidator:
                 # Check format before processing
                 if img.format not in ["JPEG", "JPG"]:
                     logger.warning(f"Unsupported format {img.format} for {image_path}")
+                    # Explicitly close before returning to make cleanup obvious
+                    img.close()
                     return None
 
                 # Process the image
@@ -41,15 +43,17 @@ class ImageValidator:
                     img = img.crop((left, top, left + side, top + side))
                 img = img.resize((image_size, image_size), Image.Resampling.LANCZOS)
 
-                # Convert to array before closing
-                return np.array(img, dtype=np.uint8)
+                # Convert to array and close image before returning
+                result = np.array(img, dtype=np.uint8)
+                img.close()
+                return result
         except Exception as e:
             logger.error(f"Error processing {image_path}: {str(e)}")
             return None
         finally:
-            # Ensure cleanup even if an exception occurs
+            # Ensure cleanup even if an exception occurs before explicit close
             if img is not None:
                 try:
                     img.close()
                 except Exception:
-                    pass  # Ignore errors during cleanup
+                    pass  # Ignore errors during cleanup (image may already be closed)
