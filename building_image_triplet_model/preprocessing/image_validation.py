@@ -17,6 +17,10 @@ class ImageValidator:
         """
         Validates and processes an image file.
         Returns None if the image is invalid or corrupted.
+
+        Note: The PIL Image context manager (with Image.open()) was intentionally not used
+        to allow explicit cleanup before early returns, making resource management more
+        obvious. The finally block ensures cleanup happens even if exceptions occur.
         """
         logger = logging.getLogger(__name__)
         img = None

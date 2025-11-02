@@ -1,7 +1,7 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from PIL import Image
 import numpy as np
@@ -81,7 +81,19 @@ class ImageEmbeddingDataModule(LightningDataModule):
         self.dataset = None
 
     def setup(self, stage: str | None = None) -> None:
-        """Set up the dataset."""
+        """Set up the dataset.
+
+        Args:
+            stage: The stage of training/evaluation. Only 'predict' stage is supported.
+
+        Raises:
+            ValueError: If stage is not None or 'predict'.
+        """
+        if stage not in (None, "predict"):
+            raise ValueError(
+                f"Stage '{stage}' not supported in ImageEmbeddingDataModule. "
+                f"Only 'predict' stage is allowed."
+            )
         self.dataset = ImageEmbeddingDataset(self.metadata_df, self.config)
 
     def predict_dataloader(self) -> DataLoader:
@@ -119,7 +131,9 @@ class BackboneInferenceModule(LightningModule):
         with torch.no_grad():
             return self.backbone(x)
 
-    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
+    def predict_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> Dict[str, torch.Tensor]:
         """
         Perform a prediction step to compute embeddings for a batch of images.
 
