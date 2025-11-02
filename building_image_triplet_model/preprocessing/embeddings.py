@@ -50,8 +50,12 @@ class ImageEmbeddingDataset(Dataset):
             with Image.open(img_path) as im:
                 tensor_img = self.transform(im.convert("RGB"))
             return tensor_img, idx
-        except Exception:
-            # Return zero tensor for problematic images
+        except (FileNotFoundError, OSError, IOError) as e:
+            # Return zero tensor for missing or corrupted images
+            # This is consistent with the legacy preprocessing method
+            import logging
+
+            logging.getLogger(__name__).warning(f"Skipping image {img_path} due to error: {e}")
             zero_tensor = torch.zeros(3, self.config.image_size, self.config.image_size)
             return zero_tensor, idx
 
@@ -134,11 +138,9 @@ class EmbeddingComputer:
         self.logger.info(f"Finished embeddings for geo metric. Shape: {embeddings.shape}")
         return targets, embeddings
 
-    def precompute_backbone_embeddings_multigpu(
-        self, h5_file, metadata_df: pd.DataFrame
-    ) -> None:
+    def precompute_backbone_embeddings(self, h5_file, metadata_df: pd.DataFrame) -> None:
         """Precompute backbone embeddings using PyTorch Lightning multi-GPU support."""
-        self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
+        self.logger.info("Precomputing backbone embeddings...")
 
         # Create Lightning module and datamodule
         lightning_module = BackboneInferenceModule(self.config)
@@ -185,84 +187,6 @@ class EmbeddingComputer:
                 embeddings = batch_pred["embeddings"].numpy()
                 embeddings_ds[indices] = embeddings
 
-        self.logger.info("Backbone embeddings precomputed and stored.")
-
-    def precompute_backbone_embeddings(self, h5_file, metadata_df: pd.DataFrame) -> None:
-        """Precompute backbone embeddings and store in HDF5."""
-        self.logger.info("Precomputing backbone embeddings...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # Create backbone model using shared utility
-        backbone = create_backbone_model(
-            self.config.feature_model, pretrained=True, device=device
-        )
-
-        # Get the backbone output size from the created model
-        backbone_output_size = get_backbone_output_size(
-            self.config.feature_model, backbone_model=backbone
-        )
-
-        self.logger.info(f"Backbone output size: {backbone_output_size}")
-
-        # Store the backbone output size in the HDF5 file for future reference
-        h5_file.attrs["backbone_output_size"] = backbone_output_size
-
-        embeddings_shape = (len(metadata_df), backbone_output_size)
-        embeddings_ds = h5_file.create_dataset(
-            "backbone_embeddings",
-            shape=embeddings_shape,
-            dtype=np.float32,
-            compression="lzf",
-        )
-
-        # Prepare image transformations for the model
-        prep = transforms.Compose(
-            [
-                transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
-                transforms.Resize((self.config.image_size, self.config.image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ]
-        )
-
-        batch_imgs: List[torch.Tensor] = []
-        batch_indices: List[int] = []
-
-        metadata_manager = MetadataManager(self.config)
-
-        for idx, row in tqdm(
-            metadata_df.iterrows(),
-            total=len(metadata_df),
-            **get_tqdm_params("Generating embeddings"),
-        ):
-            img_path = metadata_manager.build_image_path(row)
-            try:
-                with Image.open(img_path) as im:
-                    tensor_img = prep(im.convert("RGB"))
-                    batch_imgs.append(tensor_img)
-                    batch_indices.append(idx)
-
-                if len(batch_imgs) == self.config.batch_size:
-                    with torch.no_grad():
-                        out = backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
-                    embeddings_ds[batch_indices] = out
-                    batch_imgs, batch_indices = [], []
-                    # Clear GPU cache after each batch
-                    if device == "cuda":
-                        torch.cuda.empty_cache()
-            except Exception as e:
-                self.logger.warning(f"Skipping image {img_path} due to error: {e}")
-                # Store a zero vector for problematic images
-                embeddings_ds[idx] = np.zeros(backbone_output_size, dtype=np.float32)
-
-        # Process any remaining images in the last batch
-        if batch_imgs:
-            with torch.no_grad():
-                out = backbone(torch.stack(batch_imgs).to(device)).cpu().numpy()
-            embeddings_ds[batch_indices] = out
-            # Clear GPU cache after final batch
-            if device == "cuda":
-                torch.cuda.empty_cache()
         self.logger.info("Backbone embeddings precomputed and stored.")
 
     def compute_and_store_difficulty_scores_for_split(

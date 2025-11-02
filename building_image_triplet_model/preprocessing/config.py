@@ -28,7 +28,6 @@ class ProcessingConfig:
     devices: int | str = "auto"  # number of GPUs or "auto"
     accelerator: str = "auto"  # "cuda", "cpu", or "auto"
     strategy: str = "auto"  # "ddp", "ddp_spawn", or "auto"
-    use_legacy_preprocessing: bool = False  # Use old single-GPU method if True
 
     def __post_init__(self) -> None:
         if self.val_size + self.test_size >= 1.0:
@@ -89,7 +88,6 @@ def load_processing_config(config_path: Path) -> ProcessingConfig:
     devices = data_cfg.get("devices", "auto")
     accelerator = data_cfg.get("accelerator", "auto")
     strategy = data_cfg.get("strategy", "auto")
-    use_legacy_preprocessing = data_cfg.get("use_legacy_preprocessing", False)
 
     # Handle image sizes with proper inference
     image_size = data_cfg.get("image_size")
@@ -108,7 +106,6 @@ def load_processing_config(config_path: Path) -> ProcessingConfig:
         devices=devices,
         accelerator=accelerator,
         strategy=strategy,
-        use_legacy_preprocessing=use_legacy_preprocessing,
     )
 
 

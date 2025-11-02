@@ -63,14 +63,8 @@ class DatasetProcessor:
             # ------------------------------------------------------------------
             all_targets, geo_embeddings = embedding_computer.compute_geo_embeddings(metadata_df)
 
-            # Precompute backbone embeddings
-            # Use legacy method if requested, otherwise use multi-GPU Lightning-based method
-            if self.config.use_legacy_preprocessing:
-                self.logger.info("Using legacy single-GPU preprocessing method")
-                embedding_computer.precompute_backbone_embeddings(h5_file, metadata_df)
-            else:
-                self.logger.info("Using multi-GPU Lightning-based preprocessing method")
-                embedding_computer.precompute_backbone_embeddings_multigpu(h5_file, metadata_df)
+            # Precompute backbone embeddings using PyTorch Lightning multi-GPU support
+            embedding_computer.precompute_backbone_embeddings(h5_file, metadata_df)
 
             # ------------------------------------------------------------------
             # 2. For each split, slice embeddings and write distance matrices
