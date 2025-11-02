@@ -177,11 +177,6 @@ def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, t
     """Test end-to-end multi-GPU preprocessing with CPU (integration test)."""
     from pytorch_lightning import Trainer
 
-    from building_image_triplet_model.preprocessing.embeddings import (
-        BackboneInferenceModule,
-        ImageEmbeddingDataModule,
-    )
-
     # Create Lightning components
     lightning_module = BackboneInferenceModule(sample_config)
     data_module = ImageEmbeddingDataModule(sample_metadata, sample_config)
