@@ -19,6 +19,9 @@ from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_pa
 from .config import ProcessingConfig
 from .metadata import MetadataManager
 
+# Module-level logger
+logger = logging.getLogger(__name__)
+
 
 class ImageEmbeddingDataset(Dataset):
     """Dataset for loading images for embedding computation."""
@@ -53,9 +56,7 @@ class ImageEmbeddingDataset(Dataset):
         except (FileNotFoundError, OSError, IOError) as e:
             # Return zero tensor for missing or corrupted images
             # This is consistent with the legacy preprocessing method
-            import logging
-
-            logging.getLogger(__name__).warning(f"Skipping image {img_path} due to error: {e}")
+            logger.warning(f"Skipping image {img_path} due to error: {e}")
             zero_tensor = torch.zeros(3, self.config.image_size, self.config.image_size)
             return zero_tensor, idx
 
@@ -102,9 +103,6 @@ class BackboneInferenceModule(LightningModule):
         self.backbone_output_size = get_backbone_output_size(
             config.feature_model, backbone_model=self.backbone
         )
-
-        # Store predictions for gathering
-        self.predictions = []
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through backbone."""
