@@ -24,6 +24,10 @@ class ProcessingConfig:
     feature_model: str = "resnet18"  # used for backbone / training
     chunk_size: Tuple[int, int, int, int] = (1, 224, 224, 3)
     knn_k: int = 512  # number of nearest neighbours to store per target
+    # Multi-GPU preprocessing settings
+    devices: int | str = "auto"  # number of GPUs or "auto"
+    accelerator: str = "auto"  # "cuda", "cpu", or "auto"
+    strategy: str = "auto"  # "ddp", "ddp_spawn", or "auto"
 
     def __post_init__(self) -> None:
         if self.val_size + self.test_size >= 1.0:
@@ -80,6 +84,11 @@ def load_processing_config(config_path: Path) -> ProcessingConfig:
     num_workers = data_cfg.get("num_workers", 4)
     feature_model = data_cfg.get("feature_model", "resnet18")
 
+    # Get multi-GPU preprocessing parameters
+    devices = data_cfg.get("devices", "auto")
+    accelerator = data_cfg.get("accelerator", "auto")
+    strategy = data_cfg.get("strategy", "auto")
+
     # Handle image sizes with proper inference
     image_size = data_cfg.get("image_size")
     if image_size is None:
@@ -94,6 +103,9 @@ def load_processing_config(config_path: Path) -> ProcessingConfig:
         num_workers=num_workers,
         image_size=image_size,
         feature_model=feature_model,
+        devices=devices,
+        accelerator=accelerator,
+        strategy=strategy,
     )
 
 
