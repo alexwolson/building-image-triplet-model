@@ -9,6 +9,7 @@ from typing import List, Optional
 import h5py
 import numpy as np
 import pandas as pd
+import psutil
 from tqdm import tqdm
 
 from ..utils import get_tqdm_params
@@ -126,8 +127,6 @@ class HDF5Writer:
                 # Log resource usage periodically
                 if batch_idx % 100 == 0:
                     try:
-                        import psutil
-
                         process = psutil.Process()
                         mem_gb = process.memory_info().rss / (1024**3)
                         num_fds = process.num_fds() if hasattr(process, "num_fds") else "N/A"
