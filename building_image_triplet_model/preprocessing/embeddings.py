@@ -6,12 +6,19 @@ from typing import List, Tuple
 from PIL import Image
 import numpy as np
 import pandas as pd
-import psutil
 from scipy.spatial import distance as sdist
 import torch
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
+
+# Optional import: psutil is used for resource monitoring but not required
+try:
+    import psutil
+
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_params
 from .config import ProcessingConfig
@@ -44,9 +51,7 @@ class EmbeddingComputer:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Create backbone model using shared utility
-        backbone = create_backbone_model(
-            self.config.feature_model, pretrained=True, device=device
-        )
+        backbone = create_backbone_model(self.config.feature_model, pretrained=True, device=device)
 
         # Get the backbone output size from the created model
         backbone_output_size = get_backbone_output_size(
@@ -142,7 +147,8 @@ class EmbeddingComputer:
                 data=np.sort(split_target_ids).astype(np.int64),
                 compression="lzf",
             )
-        process = psutil.Process()
+        # Initialize process for memory monitoring if psutil is available
+        process = psutil.Process() if PSUTIL_AVAILABLE else None
         k = self.config.knn_k
         idx_ds = meta_grp.create_dataset(  # type: ignore
             f"knn_indices_geo_{split_name}",
@@ -194,8 +200,13 @@ class EmbeddingComputer:
 
             # Log memory usage periodically
             if (start // chunk_rows) % 10 == 0:
-                mem_gb = process.memory_info().rss / (1024**3)
-                self.logger.info(f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}")
+                if process is not None:
+                    mem_gb = process.memory_info().rss / (1024**3)
+                    self.logger.info(
+                        f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}"
+                    )
+                else:
+                    self.logger.info(f"Processed rows: {end}/{n}")
 
             start = end
         self.logger.info(f"{split_name}: stored geo distance matrix of shape {n}×{n}.")
