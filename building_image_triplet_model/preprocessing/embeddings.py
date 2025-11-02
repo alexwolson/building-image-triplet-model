@@ -1,13 +1,14 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from PIL import Image
 import numpy as np
 import pandas as pd
 import psutil
 from pytorch_lightning import LightningDataModule, LightningModule, Trainer
+from pytorch_lightning.callbacks import BasePredictionWriter
 from scipy.spatial import distance as sdist
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -30,6 +31,7 @@ class ImageEmbeddingDataset(Dataset):
         self.metadata_df = metadata_df
         self.config = config
         self.metadata_manager = MetadataManager(config)
+        self.failed_indices = set()  # Track indices of failed images
 
         # Image transformations
         self.transform = transforms.Compose(
@@ -44,21 +46,22 @@ class ImageEmbeddingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.metadata_df)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
-        """Return (image_tensor, index) tuple."""
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, bool]:
+        """Return (image_tensor, index, is_valid) tuple."""
         row = self.metadata_df.iloc[idx]
         img_path = self.metadata_manager.build_image_path(row)
 
         try:
             with Image.open(img_path) as im:
                 tensor_img = self.transform(im.convert("RGB"))
-            return tensor_img, idx
+            return tensor_img, idx, True
         except (FileNotFoundError, OSError, IOError) as e:
             # Return zero tensor for missing or corrupted images
-            # This is consistent with the legacy preprocessing method
+            # Mark this as invalid so we can skip backbone processing
             logger.warning(f"Skipping image {img_path} due to error: {e}")
+            self.failed_indices.add(idx)
             zero_tensor = torch.zeros(3, self.config.image_size, self.config.image_size)
-            return zero_tensor, idx
+            return zero_tensor, idx, False
 
 
 class ImageEmbeddingDataModule(LightningDataModule):
@@ -109,11 +112,47 @@ class BackboneInferenceModule(LightningModule):
         with torch.no_grad():
             return self.backbone(x)
 
-    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
-        """Prediction step returns embeddings and indices."""
-        images, indices = batch
-        embeddings = self(images)
+    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
+        """Prediction step returns embeddings and indices, handling invalid images."""
+        images, indices, is_valid = batch
+        
+        # Only process valid images through backbone
+        # For invalid images, return zero embeddings directly
+        embeddings = torch.zeros(
+            images.shape[0], self.backbone_output_size, device=images.device
+        )
+        
+        if is_valid.any():
+            valid_mask = is_valid.bool()
+            valid_images = images[valid_mask]
+            embeddings[valid_mask] = self(valid_images)
+        
         return {"embeddings": embeddings.cpu(), "indices": indices.cpu()}
+
+
+class HDF5PredictionWriter(BasePredictionWriter):
+    """Writes predictions directly to HDF5 to avoid memory accumulation."""
+
+    def __init__(self, embeddings_ds, write_interval: str = "batch"):
+        super().__init__(write_interval)
+        self.embeddings_ds = embeddings_ds
+        self.batches_written = 0
+
+    def write_on_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        prediction: Any,
+        batch_indices: List[int],
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        """Write each batch directly to HDF5 as it's computed."""
+        indices = prediction["indices"].numpy()
+        embeddings = prediction["embeddings"].numpy()
+        self.embeddings_ds[indices] = embeddings
+        self.batches_written += 1
 
 
 class EmbeddingComputer:
@@ -160,6 +199,10 @@ class EmbeddingComputer:
             compression="lzf",
         )
 
+        # Create prediction writer to stream results directly to HDF5
+        # This avoids accumulating all predictions in memory
+        pred_writer = HDF5PredictionWriter(embeddings_ds, write_interval="batch")
+
         # Configure trainer for multi-GPU inference
         trainer = Trainer(
             accelerator=self.config.accelerator,
@@ -169,23 +212,24 @@ class EmbeddingComputer:
             enable_checkpointing=False,
             enable_progress_bar=True,
             enable_model_summary=False,
+            callbacks=[pred_writer],
         )
 
-        # Run predictions
+        # Run predictions - results are written directly to HDF5 by the callback
         self.logger.info("Running backbone inference...")
-        predictions = trainer.predict(lightning_module, datamodule=data_module)
+        trainer.predict(lightning_module, datamodule=data_module)
 
-        # Process predictions and store in HDF5
-        self.logger.info("Storing embeddings to HDF5...")
-        if predictions:
-            for batch_pred in tqdm(
-                predictions, desc="Writing embeddings", **get_tqdm_params("Writing embeddings")
-            ):
-                indices = batch_pred["indices"].numpy()
-                embeddings = batch_pred["embeddings"].numpy()
-                embeddings_ds[indices] = embeddings
+        # Verify predictions were written
+        if pred_writer.batches_written == 0:
+            raise RuntimeError(
+                "No embeddings were computed. Check that the dataset is not empty "
+                "and that images can be loaded successfully."
+            )
 
-        self.logger.info("Backbone embeddings precomputed and stored.")
+        self.logger.info(
+            f"Backbone embeddings precomputed and stored "
+            f"({pred_writer.batches_written} batches written)."
+        )
 
     def compute_and_store_difficulty_scores_for_split(
         self,

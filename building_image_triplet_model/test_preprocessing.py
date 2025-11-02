@@ -86,13 +86,15 @@ def test_image_embedding_dataset_getitem_returns_correct_format(sample_metadata,
     """Test that ImageEmbeddingDataset.__getitem__ returns correct format."""
     dataset = ImageEmbeddingDataset(sample_metadata, sample_config)
 
-    # Since images don't exist, this should return zero tensor
-    tensor, idx = dataset[0]
+    # Since images don't exist, this should return zero tensor and is_valid=False
+    tensor, idx, is_valid = dataset[0]
 
     assert isinstance(tensor, torch.Tensor)
     assert isinstance(idx, int)
+    assert isinstance(is_valid, bool)
     assert tensor.shape == (3, sample_config.image_size, sample_config.image_size)
     assert idx == 0
+    assert is_valid is False  # Image doesn't exist
 
 
 def test_image_embedding_datamodule_setup(sample_metadata, sample_config):
@@ -116,10 +118,11 @@ def test_image_embedding_datamodule_predict_dataloader(sample_metadata, sample_c
 
     # Test that we can iterate over it
     batch = next(iter(dataloader))
-    images, indices = batch
+    images, indices, is_valid = batch
 
     assert images.shape[0] <= sample_config.batch_size
     assert indices.shape[0] <= sample_config.batch_size
+    assert is_valid.shape[0] <= sample_config.batch_size
 
 
 def test_processing_config_multi_gpu_defaults():
@@ -156,11 +159,12 @@ def test_backbone_inference_predict_step(sample_config):
     module = BackboneInferenceModule(sample_config)
     module.eval()
 
-    # Create dummy batch
+    # Create dummy batch with validity flags
     batch_size = 2
     images = torch.rand(batch_size, 3, sample_config.image_size, sample_config.image_size)
     indices = torch.tensor([0, 1])
-    batch = (images, indices)
+    is_valid = torch.tensor([True, False])  # First image valid, second invalid
+    batch = (images, indices, is_valid)
 
     # Run predict step
     result = module.predict_step(batch, batch_idx=0)
@@ -170,11 +174,16 @@ def test_backbone_inference_predict_step(sample_config):
     assert result["embeddings"].shape[0] == batch_size
     assert result["embeddings"].shape[1] == module.backbone_output_size
     assert torch.equal(result["indices"], indices)
+    
+    # Check that invalid image has zero embedding
+    assert torch.all(result["embeddings"][1] == 0)
 
 
 def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, tmp_path):
     """Test end-to-end multi-GPU preprocessing with CPU (integration test)."""
     from pytorch_lightning import Trainer
+
+    from building_image_triplet_model.preprocessing.embeddings import HDF5PredictionWriter
 
     # Create Lightning components
     lightning_module = BackboneInferenceModule(sample_config)
@@ -193,6 +202,9 @@ def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, t
             compression="lzf",
         )
 
+        # Create prediction writer
+        pred_writer = HDF5PredictionWriter(embeddings_ds, write_interval="batch")
+
         # Configure trainer
         trainer = Trainer(
             accelerator="cpu",
@@ -201,21 +213,17 @@ def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, t
             enable_checkpointing=False,
             enable_progress_bar=False,
             enable_model_summary=False,
+            callbacks=[pred_writer],
         )
 
-        # Run predictions
-        predictions = trainer.predict(lightning_module, datamodule=data_module)
-
-        # Store predictions
-        for batch_pred in predictions:
-            indices = batch_pred["indices"].numpy()
-            embeddings = batch_pred["embeddings"].numpy()
-            embeddings_ds[indices] = embeddings
+        # Run predictions - results written directly to HDF5
+        trainer.predict(lightning_module, datamodule=data_module)
 
     # Verify HDF5 file
     with h5py.File(h5_path, "r") as h5_file:
         assert "backbone_embeddings" in h5_file
         embeddings = h5_file["backbone_embeddings"][:]
         assert embeddings.shape == (len(sample_metadata), backbone_output_size)
-        # Check that embeddings are not all zeros (except for first batch which might be)
-        assert np.any(embeddings != 0) or embeddings.size == 0
+        # All embeddings should be zero since images don't exist (invalid)
+        assert np.all(embeddings == 0)
+
