@@ -24,6 +24,11 @@ data:
   # Model configuration for preprocessing
   feature_model: vit_pe_spatial_base_patch16_512.fb  # Backbone model for feature extraction
   image_size: 512                 # Input image size for the backbone model
+  
+  # Multi-GPU preprocessing settings
+  devices: "auto"                 # Number of GPUs to use for preprocessing ("auto", 1, 2, etc.)
+  accelerator: "auto"             # Device type ("auto", "cuda", "cpu")
+  strategy: "auto"                # Multi-GPU strategy ("auto", "ddp", "ddp_spawn")
 
 logging:
   project_name: "geo-triplet-net"
