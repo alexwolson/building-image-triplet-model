@@ -7,8 +7,10 @@ from PIL import Image
 import numpy as np
 import pandas as pd
 import psutil
+from pytorch_lightning import LightningDataModule, LightningModule, Trainer
 from scipy.spatial import distance as sdist
 import torch
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
@@ -16,6 +18,100 @@ from tqdm import tqdm
 from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_params
 from .config import ProcessingConfig
 from .metadata import MetadataManager
+
+
+class ImageEmbeddingDataset(Dataset):
+    """Dataset for loading images for embedding computation."""
+
+    def __init__(self, metadata_df: pd.DataFrame, config: ProcessingConfig):
+        self.metadata_df = metadata_df
+        self.config = config
+        self.metadata_manager = MetadataManager(config)
+
+        # Image transformations
+        self.transform = transforms.Compose(
+            [
+                transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
+                transforms.Resize((config.image_size, config.image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
+
+    def __len__(self) -> int:
+        return len(self.metadata_df)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
+        """Return (image_tensor, index) tuple."""
+        row = self.metadata_df.iloc[idx]
+        img_path = self.metadata_manager.build_image_path(row)
+
+        try:
+            with Image.open(img_path) as im:
+                tensor_img = self.transform(im.convert("RGB"))
+            return tensor_img, idx
+        except Exception:
+            # Return zero tensor for problematic images
+            zero_tensor = torch.zeros(3, self.config.image_size, self.config.image_size)
+            return zero_tensor, idx
+
+
+class ImageEmbeddingDataModule(LightningDataModule):
+    """DataModule for loading images during embedding computation."""
+
+    def __init__(self, metadata_df: pd.DataFrame, config: ProcessingConfig):
+        super().__init__()
+        self.metadata_df = metadata_df
+        self.config = config
+        self.dataset = None
+
+    def setup(self, stage: str | None = None) -> None:
+        """Set up the dataset."""
+        self.dataset = ImageEmbeddingDataset(self.metadata_df, self.config)
+
+    def predict_dataloader(self) -> DataLoader:
+        """Return dataloader for prediction/inference."""
+        return DataLoader(
+            self.dataset,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            shuffle=False,  # Important: maintain order for correct indexing
+            pin_memory=True,
+            persistent_workers=self.config.num_workers > 0,
+        )
+
+
+class BackboneInferenceModule(LightningModule):
+    """Lightning module for backbone inference (forward pass only)."""
+
+    def __init__(self, config: ProcessingConfig):
+        super().__init__()
+        self.config = config
+
+        # Create backbone model
+        self.backbone = create_backbone_model(
+            config.feature_model, pretrained=True, device=None  # Lightning handles device
+        )
+        self.backbone.eval()
+
+        # Get backbone output size
+        self.backbone_output_size = get_backbone_output_size(
+            config.feature_model, backbone_model=self.backbone
+        )
+
+        # Store predictions for gathering
+        self.predictions = []
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through backbone."""
+        with torch.no_grad():
+            return self.backbone(x)
+
+    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+        """Prediction step returns embeddings and indices."""
+        images, indices = batch
+        embeddings = self(images)
+        return {"embeddings": embeddings.cpu(), "indices": indices.cpu()}
 
 
 class EmbeddingComputer:
@@ -37,6 +133,59 @@ class EmbeddingComputer:
         )
         self.logger.info(f"Finished embeddings for geo metric. Shape: {embeddings.shape}")
         return targets, embeddings
+
+    def precompute_backbone_embeddings_multigpu(
+        self, h5_file, metadata_df: pd.DataFrame
+    ) -> None:
+        """Precompute backbone embeddings using PyTorch Lightning multi-GPU support."""
+        self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
+
+        # Create Lightning module and datamodule
+        lightning_module = BackboneInferenceModule(self.config)
+        data_module = ImageEmbeddingDataModule(metadata_df, self.config)
+
+        # Get backbone output size
+        backbone_output_size = lightning_module.backbone_output_size
+        self.logger.info(f"Backbone output size: {backbone_output_size}")
+
+        # Store the backbone output size in the HDF5 file
+        h5_file.attrs["backbone_output_size"] = backbone_output_size
+
+        # Create HDF5 dataset for embeddings
+        embeddings_shape = (len(metadata_df), backbone_output_size)
+        embeddings_ds = h5_file.create_dataset(
+            "backbone_embeddings",
+            shape=embeddings_shape,
+            dtype=np.float32,
+            compression="lzf",
+        )
+
+        # Configure trainer for multi-GPU inference
+        trainer = Trainer(
+            accelerator=self.config.accelerator,
+            devices=self.config.devices,
+            strategy=self.config.strategy,
+            logger=False,  # Disable logging for inference
+            enable_checkpointing=False,
+            enable_progress_bar=True,
+            enable_model_summary=False,
+        )
+
+        # Run predictions
+        self.logger.info("Running backbone inference...")
+        predictions = trainer.predict(lightning_module, datamodule=data_module)
+
+        # Process predictions and store in HDF5
+        self.logger.info("Storing embeddings to HDF5...")
+        if predictions:
+            for batch_pred in tqdm(
+                predictions, desc="Writing embeddings", **get_tqdm_params("Writing embeddings")
+            ):
+                indices = batch_pred["indices"].numpy()
+                embeddings = batch_pred["embeddings"].numpy()
+                embeddings_ds[indices] = embeddings
+
+        self.logger.info("Backbone embeddings precomputed and stored.")
 
     def precompute_backbone_embeddings(self, h5_file, metadata_df: pd.DataFrame) -> None:
         """Precompute backbone embeddings and store in HDF5."""

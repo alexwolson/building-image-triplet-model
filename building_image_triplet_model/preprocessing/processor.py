@@ -63,8 +63,8 @@ class DatasetProcessor:
             # ------------------------------------------------------------------
             all_targets, geo_embeddings = embedding_computer.compute_geo_embeddings(metadata_df)
 
-            # Precompute backbone embeddings (always required now)
-            embedding_computer.precompute_backbone_embeddings(h5_file, metadata_df)
+            # Precompute backbone embeddings with multi-GPU support
+            embedding_computer.precompute_backbone_embeddings_multigpu(h5_file, metadata_df)
 
             # ------------------------------------------------------------------
             # 2. For each split, slice embeddings and write distance matrices
