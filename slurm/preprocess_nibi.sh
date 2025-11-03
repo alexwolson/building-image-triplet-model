@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess-dataset
 #SBATCH --account=def-bussmann
-#SBATCH --gpus-per-node=1              # GPU needed for backbone embedding computation
-#SBATCH --cpus-per-task=8              # 8 cores for parallel image processing (adjust based on num_workers)
-#SBATCH --mem=32G                      # 32GB for loading images and embeddings in memory
-#SBATCH --time=72:00:00                # 72 hours (preprocessing can be long-running)
+#SBATCH --gpus-per-node=4              # GPU needed for backbone embedding computation
+#SBATCH --cpus-per-task=16              # 8 cores for parallel image processing (adjust based on num_workers)
+#SBATCH --mem=64G                      # 32GB for loading images and embeddings in memory
+#SBATCH --time=48:00:00                # 72 hours (preprocessing can be long-running)
 #SBATCH --output=slurm-preprocess-%j.out  # Job output log
 #SBATCH --error=slurm-preprocess-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
