@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 from PIL import Image
 import numpy as np
 import pandas as pd
+import psutil
 from pytorch_lightning import LightningDataModule, LightningModule, Trainer
 from pytorch_lightning.callbacks import BasePredictionWriter
 from scipy.spatial import distance as sdist
@@ -14,14 +15,6 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
-
-# Optional import: psutil is used for resource monitoring but not required
-try:
-    import psutil
-
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
 
 from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_params
 from .config import ProcessingConfig
@@ -290,8 +283,8 @@ class EmbeddingComputer:
                 data=np.sort(split_target_ids).astype(np.int64),
                 compression="lzf",
             )
-        # Initialize process for memory monitoring if psutil is available
-        process = psutil.Process() if PSUTIL_AVAILABLE else None
+        # Initialize process for memory monitoring
+        process = psutil.Process()
         k = self.config.knn_k
         idx_ds = meta_grp.create_dataset(  # type: ignore
             f"knn_indices_geo_{split_name}",
@@ -343,13 +336,8 @@ class EmbeddingComputer:
 
             # Log memory usage periodically
             if (start // chunk_rows) % 10 == 0:
-                if process is not None:
-                    mem_gb = process.memory_info().rss / (1024**3)
-                    self.logger.info(
-                        f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}"
-                    )
-                else:
-                    self.logger.info(f"Processed rows: {end}/{n}")
+                mem_gb = process.memory_info().rss / (1024**3)
+                self.logger.info(f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}")
 
             start = end
         self.logger.info(f"{split_name}: stored geo distance matrix of shape {n}×{n}.")

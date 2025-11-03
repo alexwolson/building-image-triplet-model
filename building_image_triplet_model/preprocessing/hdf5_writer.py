@@ -9,15 +9,8 @@ from typing import List, Optional
 import h5py
 import numpy as np
 import pandas as pd
+import psutil
 from tqdm import tqdm
-
-# Optional import: psutil is used for resource monitoring but not required
-try:
-    import psutil
-
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
 
 from ..utils import get_tqdm_params
 from .config import ProcessingConfig
@@ -138,24 +131,17 @@ class HDF5Writer:
 
                 # Log resource usage and perform garbage collection periodically
                 if batch_idx % RESOURCE_LOG_INTERVAL == 0:
-                    if PSUTIL_AVAILABLE:
-                        try:
-                            process = psutil.Process()
-                            mem_gb = process.memory_info().rss / (1024**3)
-                            num_fds = process.num_fds() if hasattr(process, "num_fds") else "N/A"
-                            self.logger.info(
-                                f"Batch {batch_idx}/{total_batches}: "
-                                f"RAM={mem_gb:.2f}GB, FDs={num_fds}, "
-                                f"Valid images={len(valid_indices)}/{current_idx}"
-                            )
-                        except Exception:
-                            pass  # Silently skip if psutil operations fail
-                    else:
-                        # Log without resource metrics when psutil is not available
+                    try:
+                        process = psutil.Process()
+                        mem_gb = process.memory_info().rss / (1024**3)
+                        num_fds = process.num_fds() if hasattr(process, "num_fds") else "N/A"
                         self.logger.info(
                             f"Batch {batch_idx}/{total_batches}: "
+                            f"RAM={mem_gb:.2f}GB, FDs={num_fds}, "
                             f"Valid images={len(valid_indices)}/{current_idx}"
                         )
+                    except Exception:
+                        pass  # Silently skip if psutil operations fail
                     gc.collect()
         finally:
             # Ensure executor is properly shut down

@@ -17,10 +17,6 @@ class ImageValidator:
         """
         Validates and processes an image file.
         Returns None if the image is invalid or corrupted.
-
-        Note: The PIL Image context manager (with Image.open()) was intentionally not used
-        to allow explicit cleanup before early returns, making resource management more
-        obvious. The finally block ensures cleanup happens even if exceptions occur.
         """
         logger = logging.getLogger(__name__)
         img = None
@@ -32,8 +28,6 @@ class ImageValidator:
                 # Check format before processing
                 if img.format not in ["JPEG", "JPG"]:
                     logger.warning(f"Unsupported format {img.format} for {image_path}")
-                    # Explicitly close before returning to make cleanup obvious
-                    img.close()
                     return None
 
                 # Process the image
@@ -47,17 +41,15 @@ class ImageValidator:
                     img = img.crop((left, top, left + side, top + side))
                 img = img.resize((image_size, image_size), Image.Resampling.LANCZOS)
 
-                # Convert to array and close image before returning
-                result = np.array(img, dtype=np.uint8)
-                img.close()
-                return result
+                # Convert to array before cleanup
+                return np.array(img, dtype=np.uint8)
         except Exception as e:
             logger.error(f"Error processing {image_path}: {str(e)}")
             return None
         finally:
-            # Ensure cleanup even if an exception occurs before explicit close
+            # Cleanup: close the image if it was opened
             if img is not None:
                 try:
                     img.close()
                 except Exception:
-                    pass  # Ignore errors during cleanup (image may already be closed)
+                    pass  # Ignore errors during cleanup
