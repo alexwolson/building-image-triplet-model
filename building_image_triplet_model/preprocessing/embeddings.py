@@ -1,6 +1,9 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
+import os
+import shutil
+import tempfile
 from typing import Any, Dict, List, Tuple
 
 from PIL import Image
@@ -157,11 +160,15 @@ class BackboneInferenceModule(LightningModule):
 
 
 class HDF5PredictionWriter(BasePredictionWriter):
-    """Writes predictions directly to HDF5 to avoid memory accumulation."""
+    """Writes predictions to temporary numpy files to avoid concurrent HDF5 writes.
+    
+    In distributed mode, each rank writes batches to separate numpy files.
+    These are merged into the HDF5 file after all predictions complete.
+    """
 
-    def __init__(self, embeddings_ds, write_interval: str = "batch"):
+    def __init__(self, output_dir: str, write_interval: str = "batch"):
         super().__init__(write_interval)
-        self.embeddings_ds = embeddings_ds
+        self.output_dir = output_dir
         self.batches_written = 0
 
     def write_on_batch_end(
@@ -174,10 +181,24 @@ class HDF5PredictionWriter(BasePredictionWriter):
         batch_idx: int,
         dataloader_idx: int,
     ) -> None:
-        """Write each batch directly to HDF5 as it's computed."""
-        indices = prediction["indices"].numpy()
-        embeddings = prediction["embeddings"].numpy()
-        self.embeddings_ds[indices] = embeddings
+        """Write each batch to a separate temporary numpy file."""
+        indices = prediction["indices"].cpu().numpy()
+        embeddings = prediction["embeddings"].cpu().numpy()
+
+        # Create output directory if it doesn't exist
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Save to batch-specific file (includes rank to avoid conflicts)
+        output_file = os.path.join(
+            self.output_dir,
+            f"batch_rank{trainer.global_rank}_batch{batch_idx}.npz"
+        )
+        np.savez_compressed(
+            output_file,
+            indices=indices,
+            embeddings=embeddings
+        )
+        
         self.batches_written += 1
 
 
@@ -202,8 +223,12 @@ class EmbeddingComputer:
         return targets, embeddings
 
     def precompute_backbone_embeddings(self, h5_file, metadata_df: pd.DataFrame) -> None:
-        """Precompute backbone embeddings using PyTorch Lightning multi-GPU support."""
-        self.logger.info("Precomputing backbone embeddings...")
+        """Precompute backbone embeddings using PyTorch Lightning multi-GPU support.
+        
+        Uses temporary numpy files (one per batch) to avoid HDF5 multi-process write 
+        conflicts, then merges all results back into the main HDF5 file.
+        """
+        self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
 
         # Create Lightning module and datamodule
         lightning_module = BackboneInferenceModule(self.config)
@@ -225,37 +250,72 @@ class EmbeddingComputer:
             compression="lzf",
         )
 
-        # Create prediction writer to stream results directly to HDF5
-        # This avoids accumulating all predictions in memory
-        pred_writer = HDF5PredictionWriter(embeddings_ds, write_interval="batch")
+        # Create temporary directory for batch outputs
+        temp_dir = tempfile.mkdtemp(prefix="embeddings_")
+        self.logger.info(f"Using temporary directory: {temp_dir}")
+        
+        try:
+            # Create prediction writer that saves each batch to a numpy file
+            pred_writer = HDF5PredictionWriter(temp_dir, write_interval="batch")
 
-        # Configure trainer for multi-GPU inference
-        trainer = Trainer(
-            accelerator=self.config.accelerator,
-            devices=self.config.devices,
-            strategy=self.config.strategy,
-            logger=False,  # Disable logging for inference
-            enable_checkpointing=False,
-            enable_progress_bar=True,
-            enable_model_summary=False,
-            callbacks=[pred_writer],
-        )
-
-        # Run predictions - results are written directly to HDF5 by the callback
-        self.logger.info("Running backbone inference...")
-        trainer.predict(lightning_module, datamodule=data_module)
-
-        # Verify predictions were written
-        if pred_writer.batches_written == 0:
-            raise RuntimeError(
-                "No embeddings were computed. Check that the dataset is not empty "
-                "and that images can be loaded successfully."
+            # Configure trainer for multi-GPU inference
+            self.logger.info(
+                f"Configuring trainer with devices={self.config.devices}, "
+                f"accelerator={self.config.accelerator}, strategy={self.config.strategy}"
+            )
+            trainer = Trainer(
+                accelerator=self.config.accelerator,
+                devices=self.config.devices,
+                strategy=self.config.strategy,
+                logger=False,  # Disable logging for inference
+                enable_checkpointing=False,
+                enable_progress_bar=True,
+                enable_model_summary=False,
+                callbacks=[pred_writer],
             )
 
-        self.logger.info(
-            f"Backbone embeddings precomputed and stored "
-            f"({pred_writer.batches_written} batches written)."
-        )
+            # Run predictions - results are written to temporary numpy files
+            self.logger.info("Running backbone inference across multiple GPUs...")
+            trainer.predict(lightning_module, datamodule=data_module)
+
+            # Merge all batch files into the HDF5 file
+            self.logger.info("Merging batch results into HDF5...")
+            total_written = 0
+            
+            batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".npz")])
+            self.logger.info(f"Found {len(batch_files)} batch files to merge")
+            
+            for batch_file in batch_files:
+                batch_path = os.path.join(temp_dir, batch_file)
+                
+                # Load batch data
+                data = np.load(batch_path)
+                indices = data["indices"]
+                embeddings = data["embeddings"]
+                
+                # Write to HDF5
+                embeddings_ds[indices] = embeddings
+                total_written += len(indices)
+                
+                # Clean up batch file
+                os.remove(batch_path)
+            
+            # Verify predictions were written
+            if total_written == 0:
+                raise RuntimeError(
+                    "No embeddings were computed. Check that the dataset is not empty "
+                    "and that images can be loaded successfully."
+                )
+
+            self.logger.info(
+                f"Backbone embeddings precomputed and stored ({total_written} total embeddings)."
+            )
+
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                self.logger.info(f"Cleaned up temporary directory: {temp_dir}")
 
     def compute_and_store_difficulty_scores_for_split(
         self,
