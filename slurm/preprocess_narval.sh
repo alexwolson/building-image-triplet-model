@@ -40,6 +40,7 @@ echo "Job ID: ${SLURM_JOB_ID}"
 echo "=========================================="
 
 # Load modules (Narval cluster - no internet access) - suppress Lmod informational messages
+# NOTE: These module versions must match those in setup_narval_env.sh to ensure consistency
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 # Define paths
@@ -203,7 +204,8 @@ echo "[$(date)] Starting preprocessing pipeline..."
 
 cd "${PROJECT_DIR}"
 
-uv run python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
+# Use the Python interpreter from the pre-created virtual environment directly
+.venv/bin/python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
 echo ""

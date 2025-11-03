@@ -39,6 +39,7 @@ echo ""
 
 echo "[$(date)] Loading required modules..."
 # Load modules (Narval cluster) - suppress Lmod informational messages
+# NOTE: These module versions must match those in preprocess_narval.sh to ensure consistency
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 echo "[$(date)] Modules loaded successfully"
