@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess-dataset
 #SBATCH --account=def-bussmann
-#SBATCH --gpus-per-node=1              # GPU needed for backbone embedding computation
-#SBATCH --cpus-per-task=8              # 8 cores for parallel image processing (adjust based on num_workers)
-#SBATCH --mem=32G                      # 32GB for loading images and embeddings in memory
-#SBATCH --time=72:00:00                # 72 hours (preprocessing can be long-running)
+#SBATCH --gpus-per-node=4              # GPU needed for backbone embedding computation
+#SBATCH --cpus-per-task=16              # 8 cores for parallel image processing (adjust based on num_workers)
+#SBATCH --mem=64G                      # 32GB for loading images and embeddings in memory
+#SBATCH --time=48:00:00                # 72 hours (preprocessing can be long-running)
 #SBATCH --output=slurm-preprocess-%j.out  # Job output log
 #SBATCH --error=slurm-preprocess-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
@@ -44,7 +44,7 @@ echo "=========================================="
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 # Define paths
-TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/dataset_unaligned"
+TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/"
 EXTRACT_DIR="${SLURM_TMPDIR}/extracted_dataset"
 PROJECT_SOURCE="/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model"
 PROJECT_DIR="${SLURM_TMPDIR}/building-image-triplet-model"
