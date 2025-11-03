@@ -134,10 +134,11 @@ class HDF5Writer:
                     try:
                         process = psutil.Process()
                         mem_gb = process.memory_info().rss / (1024**3)
-                        num_fds = process.num_fds() if hasattr(process, "num_fds") else "N/A"
+                        num_fds = process.num_fds() if hasattr(process, "num_fds") else -1
+                        fds_str = str(num_fds) if num_fds != -1 else "N/A"
                         self.logger.info(
                             f"Batch {batch_idx}/{total_batches}: "
-                            f"RAM={mem_gb:.2f}GB, FDs={num_fds}, "
+                            f"RAM={mem_gb:.2f}GB, FDs={fds_str}, "
                             f"Valid images={len(valid_indices)}/{current_idx}"
                         )
                     except Exception:
