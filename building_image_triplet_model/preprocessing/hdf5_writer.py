@@ -1,10 +1,11 @@
 """HDF5 file operations for dataset storage."""
 
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 import gc
 from itertools import batched
 import logging
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 import h5py
 import numpy as np
@@ -32,6 +33,16 @@ class HDF5Writer:
     def __init__(self, config: ProcessingConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
+
+    @contextmanager
+    def _managed_executor(self) -> Iterator[ProcessPoolExecutor]:
+        """Context manager for ProcessPoolExecutor with guaranteed cleanup."""
+        executor = ProcessPoolExecutor(max_workers=self.config.num_workers)
+        try:
+            yield executor
+        finally:
+            executor.shutdown(wait=True)
+            gc.collect()
 
     def initialize_hdf5(self, n_images: int, metadata_df: pd.DataFrame):
         """Initialize HDF5 file with proper chunking and compression for metadata."""
@@ -99,10 +110,8 @@ class HDF5Writer:
 
         total_batches = (len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size
 
-        # Create initial executor
-        executor = ProcessPoolExecutor(max_workers=self.config.num_workers)
-
-        try:
+        # Use context manager for executor lifecycle management
+        with self._managed_executor() as executor:
             for batch_idx, batch in enumerate(
                 tqdm(
                     batched(metadata_df.iterrows(), self.config.batch_size),
@@ -116,6 +125,7 @@ class HDF5Writer:
                         f"Recycling worker pool at batch {batch_idx}/{total_batches} "
                         f"to prevent resource accumulation"
                     )
+                    # Exit current executor context and create a new one
                     executor.shutdown(wait=True)
                     gc.collect()
                     executor = ProcessPoolExecutor(max_workers=self.config.num_workers)
@@ -144,10 +154,6 @@ class HDF5Writer:
                     except Exception:
                         pass  # Silently skip if psutil operations fail
                     gc.collect()
-        finally:
-            # Ensure executor is properly shut down
-            executor.shutdown(wait=True)
-            gc.collect()
 
         # Store valid_indices as a compact dataset
         images_group = h5_file["images"]  # type: ignore[assignment]
