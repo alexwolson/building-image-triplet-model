@@ -168,6 +168,9 @@ data:
   num_workers: 8
   feature_model: "vit_pe_spatial_base_patch16_512.fb"
   image_size: 512
+  devices: "auto"
+  accelerator: "auto"
+  strategy: "auto"
   # Optional: n_samples and n_images for limiting dataset size
   # n_samples: null
   # n_images: null

@@ -54,16 +54,16 @@ cp -r "${PROJECT_SOURCE}" "${PROJECT_DIR}"
 cd "${PROJECT_DIR}"
 
 # Create virtual environment and install dependencies
-# Note: This assumes dependencies are available via pip without internet access
-# Dependencies should be pre-installed in the Python module or available via wheelhouse
+# Note: This relies on dependencies being pre-installed in the loaded Python module
+# The --no-deps flag prevents pip from attempting to download dependencies from PyPI
 echo "[$(date)] Creating virtual environment and installing dependencies..."
-python -m venv .venv
+python -m venv --system-site-packages .venv
 source .venv/bin/activate
 
-# Install the project in development mode
-# This will install dependencies from pyproject.toml using pip
-# If dependencies are not available, they should be pre-installed or in a wheelhouse
-pip install --no-cache-dir -e .
+# Install the project in development mode without resolving dependencies
+# Using --no-deps ensures no network calls are made
+# All dependencies must be available in the system Python or loaded module
+pip install --no-cache-dir --no-deps -e .
 
 echo "[$(date)] Environment setup complete"
 echo ""
@@ -164,6 +164,9 @@ data:
   num_workers: 8
   feature_model: "vit_pe_spatial_base_patch16_512.fb"
   image_size: 512
+  devices: "auto"
+  accelerator: "auto"
+  strategy: "auto"
   # Optional: n_samples and n_images for limiting dataset size
   # n_samples: null
   # n_images: null
