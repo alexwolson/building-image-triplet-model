@@ -282,7 +282,7 @@ class EmbeddingComputer:
             self.logger.info("Merging batch results into HDF5...")
             total_written = 0
             
-            batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith('.npz')])
+            batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".npz")])
             self.logger.info(f"Found {len(batch_files)} batch files to merge")
             
             for batch_file in batch_files:
