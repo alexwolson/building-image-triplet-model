@@ -1,6 +1,9 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
+import os
+import shutil
+import tempfile
 from typing import Any, Dict, List, Tuple
 
 from PIL import Image
@@ -179,14 +182,12 @@ class HDF5PredictionWriter(BasePredictionWriter):
         dataloader_idx: int,
     ) -> None:
         """Write each batch to a separate temporary numpy file."""
-        import os
-        
         indices = prediction["indices"].cpu().numpy()
         embeddings = prediction["embeddings"].cpu().numpy()
-        
+
         # Create output directory if it doesn't exist
         os.makedirs(self.output_dir, exist_ok=True)
-        
+
         # Save to batch-specific file (includes rank to avoid conflicts)
         output_file = os.path.join(
             self.output_dir,
@@ -227,9 +228,6 @@ class EmbeddingComputer:
         Uses temporary numpy files (one per batch) to avoid HDF5 multi-process write 
         conflicts, then merges all results back into the main HDF5 file.
         """
-        import os
-        import tempfile
-        
         self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
 
         # Create Lightning module and datamodule
@@ -312,29 +310,12 @@ class EmbeddingComputer:
             self.logger.info(
                 f"Backbone embeddings precomputed and stored ({total_written} total embeddings)."
             )
-            
+
         finally:
             # Clean up temporary directory
-            import shutil
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
                 self.logger.info(f"Cleaned up temporary directory: {temp_dir}")
-
-        # Run predictions - results are written directly to HDF5 by the callback
-        self.logger.info("Running backbone inference...")
-        trainer.predict(lightning_module, datamodule=data_module)
-
-        # Verify predictions were written
-        if pred_writer.batches_written == 0:
-            raise RuntimeError(
-                "No embeddings were computed. Check that the dataset is not empty "
-                "and that images can be loaded successfully."
-            )
-
-        self.logger.info(
-            f"Backbone embeddings precomputed and stored "
-            f"({pred_writer.batches_written} batches written)."
-        )
 
     def compute_and_store_difficulty_scores_for_split(
         self,
