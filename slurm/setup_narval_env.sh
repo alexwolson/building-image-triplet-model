@@ -18,6 +18,8 @@ echo "Setting up Narval environment on $(hostname) at $(date)"
 echo "=========================================="
 
 # Define project path (adjust if needed)
+# Note: This path is specific to the Narval cluster environment
+# Update this variable to match your project location
 PROJECT_SOURCE="/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model"
 
 # Change to project directory
@@ -114,8 +116,13 @@ echo "Python version: $(python --version)"
 echo "Python location: $(which python)"
 
 # Check if key packages are installed
-if python -c "import torch; import lightning; import h5py; import timm" 2>/dev/null; then
-    echo "[$(date)] Key packages verified successfully"
+echo "Verifying core dependencies..."
+if python -c "import torch; import lightning; import h5py; import timm; import numpy; import pandas; import sklearn" 2>/dev/null; then
+    echo "[$(date)] All core packages verified successfully"
+    echo "  - PyTorch: $(python -c 'import torch; print(torch.__version__)')"
+    echo "  - Lightning: $(python -c 'import lightning; print(lightning.__version__)')"
+    echo "  - timm: $(python -c 'import timm; print(timm.__version__)')"
+    echo "  - h5py: $(python -c 'import h5py; print(h5py.__version__)')"
 else
     echo "WARNING: Some key packages may not be installed correctly" >&2
 fi
