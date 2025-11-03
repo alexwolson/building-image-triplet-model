@@ -1,7 +1,7 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from PIL import Image
 import numpy as np
@@ -74,7 +74,19 @@ class ImageEmbeddingDataModule(LightningDataModule):
         self.dataset = None
 
     def setup(self, stage: str | None = None) -> None:
-        """Set up the dataset."""
+        """Set up the dataset.
+
+        Args:
+            stage: The stage of training/evaluation. Only 'predict' stage is supported.
+
+        Raises:
+            ValueError: If stage is not None or 'predict'.
+        """
+        if stage not in (None, "predict"):
+            raise ValueError(
+                f"Stage '{stage}' not supported in ImageEmbeddingDataModule. "
+                f"Only 'predict' stage is allowed."
+            )
         self.dataset = ImageEmbeddingDataset(self.metadata_df, self.config)
 
     def predict_dataloader(self) -> DataLoader:
@@ -112,7 +124,9 @@ class BackboneInferenceModule(LightningModule):
         with torch.no_grad():
             return self.backbone(x)
 
-    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
+    def predict_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> Dict[str, torch.Tensor]:
         """
         Perform a prediction step to compute embeddings for a batch of images.
 
@@ -129,18 +143,16 @@ class BackboneInferenceModule(LightningModule):
                 - "indices": The indices of the images in the batch.
         """
         images, indices, is_valid = batch
-        
+
         # Only process valid images through backbone
         # For invalid images, return zero embeddings directly
-        embeddings = torch.zeros(
-            images.shape[0], self.backbone_output_size, device=images.device
-        )
-        
+        embeddings = torch.zeros(images.shape[0], self.backbone_output_size, device=images.device)
+
         if is_valid.any():
             valid_mask = is_valid.bool()
             valid_images = images[valid_mask]
             embeddings[valid_mask] = self(valid_images)
-        
+
         return {"embeddings": embeddings.cpu(), "indices": indices.cpu()}
 
 
@@ -271,6 +283,7 @@ class EmbeddingComputer:
                 data=np.sort(split_target_ids).astype(np.int64),
                 compression="lzf",
             )
+        # Get current process for memory monitoring
         process = psutil.Process()
         k = self.config.knn_k
         idx_ds = meta_grp.create_dataset(  # type: ignore

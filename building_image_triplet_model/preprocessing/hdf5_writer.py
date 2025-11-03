@@ -1,20 +1,30 @@
 """HDF5 file operations for dataset storage."""
 
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 import gc
 from itertools import batched
 import logging
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 import h5py
 import numpy as np
 import pandas as pd
+import psutil
 from tqdm import tqdm
 
 from ..utils import get_tqdm_params
 from .config import ProcessingConfig
 from .image_validation import ImageValidator
 from .metadata import MetadataManager
+
+# Worker pool recycling interval to prevent long-term resource accumulation
+# After processing this many batches, the process pool is shut down and recreated
+EXECUTOR_RECYCLE_INTERVAL = 1000
+
+# Resource monitoring interval for logging memory usage and file descriptors
+# Log resource usage every N batches to track system health during processing
+RESOURCE_LOG_INTERVAL = 100
 
 
 class HDF5Writer:
@@ -24,6 +34,16 @@ class HDF5Writer:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
+    @contextmanager
+    def _managed_executor(self) -> Iterator[ProcessPoolExecutor]:
+        """Context manager for ProcessPoolExecutor with guaranteed cleanup."""
+        executor = ProcessPoolExecutor(max_workers=self.config.num_workers)
+        try:
+            yield executor
+        finally:
+            executor.shutdown(wait=True)
+            gc.collect()
+
     def initialize_hdf5(self, n_images: int, metadata_df: pd.DataFrame):
         """Initialize HDF5 file with proper chunking and compression for metadata."""
         f = h5py.File(self.config.output_file, "w")
@@ -32,26 +52,27 @@ class HDF5Writer:
         f.create_group("splits")
         return f
 
-    def process_image_batch(self, batch_rows: pd.DataFrame) -> List[Optional[np.ndarray]]:
-        """Process a batch of images in parallel."""
+    def process_image_batch(
+        self, batch_rows: pd.DataFrame, executor: ProcessPoolExecutor
+    ) -> List[Optional[np.ndarray]]:
+        """Process a batch of images in parallel using provided executor."""
         results: List[Optional[np.ndarray]] = []
         metadata_manager = MetadataManager(self.config)
 
-        with ProcessPoolExecutor(max_workers=self.config.num_workers) as executor:
-            futures = []
-            for _, row in batch_rows.iterrows():
-                image_path = metadata_manager.build_image_path(row)
-                futures.append(
-                    executor.submit(
-                        ImageValidator.validate_and_process, image_path, self.config.image_size
-                    )
+        futures = []
+        for _, row in batch_rows.iterrows():
+            image_path = metadata_manager.build_image_path(row)
+            futures.append(
+                executor.submit(
+                    ImageValidator.validate_and_process, image_path, self.config.image_size
                 )
-            for future in futures:
-                try:
-                    results.append(future.result())
-                except Exception as e:
-                    self.logger.error(f"Error in batch processing: {str(e)}")
-                    results.append(None)
+            )
+        for future in futures:
+            try:
+                results.append(future.result())
+            except Exception as e:
+                self.logger.error(f"Error in batch processing: {str(e)}")
+                results.append(None)
         return results
 
     def store_metadata(self, h5_file, metadata_df: pd.DataFrame) -> None:
@@ -87,22 +108,52 @@ class HDF5Writer:
         current_idx = 0  # Global row counter in metadata_df order
         valid_indices: List[int] = []
 
-        for batch_idx, batch in enumerate(
-            tqdm(
-                batched(metadata_df.iterrows(), self.config.batch_size),
-                total=(len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size,
-                **get_tqdm_params("Processing batches"),
-            )
-        ):
-            batch_df = pd.DataFrame([row for _, row in batch])
-            processed_images = self.process_image_batch(batch_df)
-            for i, img in enumerate(processed_images):
-                global_idx = current_idx + i
-                if img is not None:
-                    valid_indices.append(global_idx)
-            current_idx += len(processed_images)
-            del processed_images
-            gc.collect()
+        total_batches = (len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size
+
+        # Use context manager for executor lifecycle management
+        with self._managed_executor() as executor:
+            for batch_idx, batch in enumerate(
+                tqdm(
+                    batched(metadata_df.iterrows(), self.config.batch_size),
+                    total=total_batches,
+                    **get_tqdm_params("Processing batches"),
+                )
+            ):
+                # Recycle executor periodically to prevent resource leaks
+                if batch_idx > 0 and batch_idx % EXECUTOR_RECYCLE_INTERVAL == 0:
+                    self.logger.info(
+                        f"Recycling worker pool at batch {batch_idx}/{total_batches} "
+                        f"to prevent resource accumulation"
+                    )
+                    # Exit current executor context and create a new one
+                    executor.shutdown(wait=True)
+                    gc.collect()
+                    executor = ProcessPoolExecutor(max_workers=self.config.num_workers)
+
+                batch_df = pd.DataFrame([row for _, row in batch])
+                processed_images = self.process_image_batch(batch_df, executor)
+                for i, img in enumerate(processed_images):
+                    global_idx = current_idx + i
+                    if img is not None:
+                        valid_indices.append(global_idx)
+                current_idx += len(processed_images)
+                del processed_images
+
+                # Log resource usage and perform garbage collection periodically
+                if batch_idx % RESOURCE_LOG_INTERVAL == 0:
+                    try:
+                        process = psutil.Process()
+                        mem_gb = process.memory_info().rss / (1024**3)
+                        num_fds = process.num_fds() if hasattr(process, "num_fds") else -1
+                        fds_str = str(num_fds) if num_fds != -1 else "N/A"
+                        self.logger.info(
+                            f"Batch {batch_idx}/{total_batches}: "
+                            f"RAM={mem_gb:.2f}GB, FDs={fds_str}, "
+                            f"Valid images={len(valid_indices)}/{current_idx}"
+                        )
+                    except Exception:
+                        pass  # Silently skip if psutil operations fail
+                    gc.collect()
 
         # Store valid_indices as a compact dataset
         images_group = h5_file["images"]  # type: ignore[assignment]
