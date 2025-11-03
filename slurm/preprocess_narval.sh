@@ -11,6 +11,23 @@
 #SBATCH --mail-type=END,FAIL            # Email on completion or failure
 
 ###############################################################################
+# Dataset Preprocessing Script for Narval Cluster
+#
+# PREREQUISITES:
+#   Before submitting this job, you must run the environment setup script
+#   on the login node:
+#     bash slurm/setup_narval_env.sh
+#
+#   This creates a virtual environment with uv and installs all dependencies.
+#
+# USAGE:
+#   sbatch slurm/preprocess_narval.sh
+#
+# This script assumes the virtual environment already exists at:
+#   /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/.venv
+###############################################################################
+
+###############################################################################
 # Phase 1: Setup and Initialization
 ###############################################################################
 
@@ -23,6 +40,7 @@ echo "Job ID: ${SLURM_JOB_ID}"
 echo "=========================================="
 
 # Load modules (Narval cluster - no internet access) - suppress Lmod informational messages
+# NOTE: These module versions must match those in setup_narval_env.sh to ensure consistency
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 # Define paths
@@ -53,19 +71,20 @@ echo "[$(date)] Copying project to ${PROJECT_DIR}..."
 cp -r "${PROJECT_SOURCE}" "${PROJECT_DIR}"
 cd "${PROJECT_DIR}"
 
-# Create virtual environment and install dependencies
-# Note: This relies on dependencies being pre-installed in the loaded Python module
-# The --no-deps flag prevents pip from attempting to download dependencies from PyPI
-echo "[$(date)] Creating virtual environment and installing dependencies..."
-python -m venv --system-site-packages .venv
+# Activate the pre-created virtual environment
+# This environment should have been created on the login node using setup_narval_env.sh
+echo "[$(date)] Activating pre-created virtual environment..."
+if [[ ! -f .venv/bin/activate ]]; then
+    echo "ERROR: Virtual environment not found at .venv/bin/activate" >&2
+    echo "Please run setup_narval_env.sh on the login node first:" >&2
+    echo "  bash slurm/setup_narval_env.sh" >&2
+    exit 1
+fi
 source .venv/bin/activate
 
-# Install the project in development mode without resolving dependencies
-# Using --no-deps ensures no network calls are made
-# All dependencies must be available in the system Python or loaded module
-pip install --no-cache-dir --no-deps -e .
-
-echo "[$(date)] Environment setup complete"
+echo "[$(date)] Environment activated successfully"
+echo "Python version: $(python --version)"
+echo "Python location: $(which python)"
 echo ""
 
 ###############################################################################
@@ -185,7 +204,8 @@ echo "[$(date)] Starting preprocessing pipeline..."
 
 cd "${PROJECT_DIR}"
 
-python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
+# Use the Python interpreter from the pre-created virtual environment directly
+.venv/bin/python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
 echo ""
