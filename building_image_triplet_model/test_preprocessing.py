@@ -181,6 +181,9 @@ def test_backbone_inference_predict_step(sample_config):
 
 def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, tmp_path):
     """Test end-to-end multi-GPU preprocessing with CPU (integration test)."""
+    import os
+    import shutil
+
     from pytorch_lightning import Trainer
 
     from building_image_triplet_model.preprocessing.embeddings import HDF5PredictionWriter
@@ -189,21 +192,14 @@ def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, t
     lightning_module = BackboneInferenceModule(sample_config)
     data_module = ImageEmbeddingDataModule(sample_metadata, sample_config)
 
-    # Create HDF5 file
+    # Create HDF5 file and temporary directory for batch files
     h5_path = tmp_path / "test_embeddings.h5"
-    with h5py.File(h5_path, "w") as h5_file:
-        # Create embeddings dataset
-        backbone_output_size = lightning_module.backbone_output_size
-        embeddings_shape = (len(sample_metadata), backbone_output_size)
-        embeddings_ds = h5_file.create_dataset(
-            "backbone_embeddings",
-            shape=embeddings_shape,
-            dtype=np.float32,
-            compression="lzf",
-        )
+    temp_dir = str(tmp_path / "temp_batches")
+    os.makedirs(temp_dir, exist_ok=True)
 
-        # Create prediction writer
-        pred_writer = HDF5PredictionWriter(embeddings_ds, write_interval="batch")
+    try:
+        # Create prediction writer that saves to temporary files
+        pred_writer = HDF5PredictionWriter(temp_dir, write_interval="batch")
 
         # Configure trainer
         trainer = Trainer(
@@ -216,14 +212,39 @@ def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, t
             callbacks=[pred_writer],
         )
 
-        # Run predictions - results written directly to HDF5
+        # Run predictions - results written to temporary numpy files
         trainer.predict(lightning_module, datamodule=data_module)
 
-    # Verify HDF5 file
-    with h5py.File(h5_path, "r") as h5_file:
-        assert "backbone_embeddings" in h5_file
-        embeddings = h5_file["backbone_embeddings"][:]
-        assert embeddings.shape == (len(sample_metadata), backbone_output_size)
-        # All embeddings should be zero since images don't exist (invalid)
-        assert np.all(embeddings == 0)
+        # Now merge the temporary files into HDF5 (simulating what the actual code does)
+        backbone_output_size = lightning_module.backbone_output_size
+        with h5py.File(h5_path, "w") as h5_file:
+            embeddings_shape = (len(sample_metadata), backbone_output_size)
+            embeddings_ds = h5_file.create_dataset(
+                "backbone_embeddings",
+                shape=embeddings_shape,
+                dtype=np.float32,
+                compression="lzf",
+            )
+
+            # Merge batch files
+            batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".npz")])
+            for batch_file in batch_files:
+                batch_path = os.path.join(temp_dir, batch_file)
+                data = np.load(batch_path)
+                indices = data["indices"]
+                embeddings = data["embeddings"]
+                embeddings_ds[indices] = embeddings
+
+        # Verify HDF5 file
+        with h5py.File(h5_path, "r") as h5_file:
+            assert "backbone_embeddings" in h5_file
+            embeddings = h5_file["backbone_embeddings"][:]
+            assert embeddings.shape == (len(sample_metadata), backbone_output_size)
+            # All embeddings should be zero since images don't exist (invalid)
+            assert np.all(embeddings == 0)
+
+    finally:
+        # Cleanup temp directory
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
