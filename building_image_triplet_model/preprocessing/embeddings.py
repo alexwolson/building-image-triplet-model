@@ -283,7 +283,7 @@ class EmbeddingComputer:
                 data=np.sort(split_target_ids).astype(np.int64),
                 compression="lzf",
             )
-        # Initialize process for memory monitoring
+        # Get current process for memory monitoring
         process = psutil.Process()
         k = self.config.knn_k
         idx_ds = meta_grp.create_dataset(  # type: ignore
