@@ -110,23 +110,25 @@ echo ""
 
 echo "[$(date)] Verifying installation..."
 
-# Activate environment and check Python
-source .venv/bin/activate
+# Activate environment and check Python in a subshell to avoid persisting activation
+(
+    source .venv/bin/activate
 
-echo "Python version: $(python --version)"
-echo "Python location: $(which python)"
+    echo "Python version: $(python --version)"
+    echo "Python location: $(which python)"
 
-# Check if key packages are installed
-echo "Verifying core dependencies..."
-if python -c "import torch; import lightning; import h5py; import timm; import numpy; import pandas; import sklearn" 2>/dev/null; then
-    echo "[$(date)] All core packages verified successfully"
-    echo "  - PyTorch: $(python -c 'import torch; print(torch.__version__)')"
-    echo "  - Lightning: $(python -c 'import lightning; print(lightning.__version__)')"
-    echo "  - timm: $(python -c 'import timm; print(timm.__version__)')"
-    echo "  - h5py: $(python -c 'import h5py; print(h5py.__version__)')"
-else
-    echo "WARNING: Some key packages may not be installed correctly" >&2
-fi
+    # Check if key packages are installed
+    echo "Verifying core dependencies..."
+    if python -c "import torch; import lightning; import h5py; import timm; import numpy; import pandas; import sklearn" 2>/dev/null; then
+        echo "[$(date)] All core packages verified successfully"
+        echo "  - PyTorch: $(python -c 'import torch; print(torch.__version__)')"
+        echo "  - Lightning: $(python -c 'import lightning; print(lightning.__version__)')"
+        echo "  - timm: $(python -c 'import timm; print(timm.__version__)')"
+        echo "  - h5py: $(python -c 'import h5py; print(h5py.__version__)')"
+    else
+        echo "WARNING: Some key packages may not be installed correctly" >&2
+    fi
+)
 
 echo ""
 
