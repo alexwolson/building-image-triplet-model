@@ -290,8 +290,8 @@ class EmbeddingComputer:
                 
                 # Load batch data
                 data = np.load(batch_path)
-                indices = data['indices']
-                embeddings = data['embeddings']
+                indices = data["indices"]
+                embeddings = data["embeddings"]
                 
                 # Write to HDF5
                 embeddings_ds[indices] = embeddings
