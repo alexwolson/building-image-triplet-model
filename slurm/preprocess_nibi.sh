@@ -2,8 +2,7 @@
 #SBATCH --job-name=preprocess-dataset
 #SBATCH --account=def-bussmann
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=1              # Single GPU is sufficient for backbone embedding computation
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:1                   # Single GPU is sufficient for backbone embedding computation
 #SBATCH --cpus-per-task=16             # 16 cores for parallel image processing (adjust based on num_workers)
 #SBATCH --mem=64G                      # 64GB for loading images and embeddings in memory
 #SBATCH --time=48:00:00                # 48 hours (preprocessing can be long-running)
@@ -192,7 +191,6 @@ cd "${PROJECT_DIR}"
 
 srun --ntasks=1 \
      --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
-     --gpus="${SLURM_GPUS_PER_NODE:-1}" \
      uv run python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
