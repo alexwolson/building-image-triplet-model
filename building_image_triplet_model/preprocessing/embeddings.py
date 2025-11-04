@@ -304,14 +304,21 @@ class EmbeddingComputer:
                 # Store the backbone output size in the HDF5 file
                 h5_file.attrs["backbone_output_size"] = backbone_output_size
 
-                # Create HDF5 dataset for embeddings
+                # Create HDF5 dataset for embeddings (or get existing one)
                 embeddings_shape = (len(metadata_df), backbone_output_size)
-                embeddings_ds = h5_file.create_dataset(
-                    "backbone_embeddings",
-                    shape=embeddings_shape,
-                    dtype=np.float32,
-                    compression="lzf",
-                )
+                if "backbone_embeddings" in h5_file:
+                    # Dataset already exists - this shouldn't happen in normal flow
+                    self.logger.warning(
+                        "backbone_embeddings dataset already exists, using existing dataset"
+                    )
+                    embeddings_ds = h5_file["backbone_embeddings"]
+                else:
+                    embeddings_ds = h5_file.create_dataset(
+                        "backbone_embeddings",
+                        shape=embeddings_shape,
+                        dtype=np.float32,
+                        compression="lzf",
+                    )
 
                 total_written = 0
                 batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".npz")])
