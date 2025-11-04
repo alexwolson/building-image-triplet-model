@@ -304,14 +304,25 @@ class EmbeddingComputer:
                 # Store the backbone output size in the HDF5 file
                 h5_file.attrs["backbone_output_size"] = backbone_output_size
 
-                # Create HDF5 dataset for embeddings (or get existing one)
+                # Create HDF5 dataset for embeddings (or validate existing one)
                 embeddings_shape = (len(metadata_df), backbone_output_size)
                 if "backbone_embeddings" in h5_file:
-                    # Dataset already exists - this shouldn't happen in normal flow
-                    self.logger.warning(
-                        "backbone_embeddings dataset already exists, using existing dataset"
-                    )
+                    # Dataset already exists - validate it has correct shape and dtype
                     embeddings_ds = h5_file["backbone_embeddings"]
+                    if embeddings_ds.shape != embeddings_shape:
+                        raise ValueError(
+                            f"Existing backbone_embeddings dataset has incorrect shape. "
+                            f"Expected {embeddings_shape}, got {embeddings_ds.shape}"
+                        )
+                    if embeddings_ds.dtype != np.float32:
+                        raise ValueError(
+                            f"Existing backbone_embeddings dataset has incorrect dtype. "
+                            f"Expected float32, got {embeddings_ds.dtype}"
+                        )
+                    self.logger.warning(
+                        "backbone_embeddings dataset already exists with correct shape/dtype, "
+                        "will overwrite existing data"
+                    )
                 else:
                     embeddings_ds = h5_file.create_dataset(
                         "backbone_embeddings",
