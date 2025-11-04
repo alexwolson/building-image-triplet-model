@@ -240,6 +240,7 @@ class EmbeddingComputer:
         
         Raises:
             FileNotFoundError: If the HDF5 file does not exist.
+            ValueError: If backbone_embeddings dataset exists with incorrect shape or dtype.
             RuntimeError: If no embeddings were computed successfully.
         
         Note:
@@ -320,8 +321,7 @@ class EmbeddingComputer:
                             f"Expected float32, got {embeddings_ds.dtype}"
                         )
                     self.logger.warning(
-                        "backbone_embeddings dataset already exists with correct shape/dtype, "
-                        "will overwrite existing data"
+                        "Overwriting existing backbone_embeddings dataset with correct shape/dtype"
                     )
                 else:
                     embeddings_ds = h5_file.create_dataset(
