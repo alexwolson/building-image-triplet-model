@@ -1,6 +1,7 @@
 """Main dataset processor orchestration."""
 
 import gc
+import h5py
 import logging
 import sys
 
@@ -63,8 +64,21 @@ class DatasetProcessor:
             # ------------------------------------------------------------------
             all_targets, geo_embeddings = embedding_computer.compute_geo_embeddings(metadata_df)
 
+            # CRITICAL: Close HDF5 file before multi-GPU operations
+            # This prevents file descriptor inheritance issues when PyTorch Lightning
+            # spawns worker processes for distributed training
+            h5_file.close()
+            self.logger.info("Closed HDF5 file before multi-GPU embedding computation")
+
             # Precompute backbone embeddings using PyTorch Lightning multi-GPU support
-            embedding_computer.precompute_backbone_embeddings(h5_file, metadata_df)
+            # Pass the file path, not the file handle
+            embedding_computer.precompute_backbone_embeddings(
+                self.config.output_file, metadata_df
+            )
+
+            # Reopen HDF5 file in append mode to continue processing
+            self.logger.info("Reopening HDF5 file after multi-GPU embedding computation")
+            h5_file = h5py.File(self.config.output_file, "a")
 
             # ------------------------------------------------------------------
             # 2. For each split, slice embeddings and write distance matrices

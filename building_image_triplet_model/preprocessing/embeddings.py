@@ -2,11 +2,13 @@
 
 import logging
 import os
+from pathlib import Path
 import shutil
 import tempfile
 from typing import Any, Dict, List, Tuple
 
 from PIL import Image
+import h5py
 import numpy as np
 import pandas as pd
 import psutil
@@ -222,11 +224,24 @@ class EmbeddingComputer:
         self.logger.info(f"Finished embeddings for geo metric. Shape: {embeddings.shape}")
         return targets, embeddings
 
-    def precompute_backbone_embeddings(self, h5_file, metadata_df: pd.DataFrame) -> None:
+    def precompute_backbone_embeddings(
+        self, h5_path: Path | str, metadata_df: pd.DataFrame
+    ) -> None:
         """Precompute backbone embeddings using PyTorch Lightning multi-GPU support.
         
         Uses temporary numpy files (one per batch) to avoid HDF5 multi-process write 
         conflicts, then merges all results back into the main HDF5 file.
+        
+        Args:
+            h5_path: Path to the HDF5 file. The file must exist but will be opened 
+                     in append mode after multi-GPU inference completes.
+            metadata_df: DataFrame containing image metadata.
+        
+        Note:
+            This method does NOT accept an open HDF5 file handle to avoid issues with
+            distributed training. The file is opened only after PyTorch Lightning
+            completes its multi-GPU inference to prevent file descriptor inheritance
+            in worker processes.
         """
         self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
 
@@ -237,18 +252,6 @@ class EmbeddingComputer:
         # Get backbone output size
         backbone_output_size = lightning_module.backbone_output_size
         self.logger.info(f"Backbone output size: {backbone_output_size}")
-
-        # Store the backbone output size in the HDF5 file
-        h5_file.attrs["backbone_output_size"] = backbone_output_size
-
-        # Create HDF5 dataset for embeddings
-        embeddings_shape = (len(metadata_df), backbone_output_size)
-        embeddings_ds = h5_file.create_dataset(
-            "backbone_embeddings",
-            shape=embeddings_shape,
-            dtype=np.float32,
-            compression="lzf",
-        )
 
         # Create temporary directory for batch outputs
         temp_dir = tempfile.mkdtemp(prefix="embeddings_")
@@ -275,41 +278,56 @@ class EmbeddingComputer:
             )
 
             # Run predictions - results are written to temporary numpy files
+            # IMPORTANT: HDF5 file is NOT open during this step to avoid distributed
+            # training issues with file descriptor inheritance
             self.logger.info("Running backbone inference across multiple GPUs...")
             trainer.predict(lightning_module, datamodule=data_module)
 
-            # Merge all batch files into the HDF5 file
+            # Now open HDF5 file in append mode and merge batch results
+            # This happens AFTER all worker processes have been cleaned up
             self.logger.info("Merging batch results into HDF5...")
-            total_written = 0
-            
-            batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".npz")])
-            self.logger.info(f"Found {len(batch_files)} batch files to merge")
-            
-            for batch_file in batch_files:
-                batch_path = os.path.join(temp_dir, batch_file)
-                
-                # Load batch data
-                data = np.load(batch_path)
-                indices = data["indices"]
-                embeddings = data["embeddings"]
-                
-                # Write to HDF5
-                embeddings_ds[indices] = embeddings
-                total_written += len(indices)
-                
-                # Clean up batch file
-                os.remove(batch_path)
-            
-            # Verify predictions were written
-            if total_written == 0:
-                raise RuntimeError(
-                    "No embeddings were computed. Check that the dataset is not empty "
-                    "and that images can be loaded successfully."
+            with h5py.File(h5_path, "a") as h5_file:
+                # Store the backbone output size in the HDF5 file
+                h5_file.attrs["backbone_output_size"] = backbone_output_size
+
+                # Create HDF5 dataset for embeddings
+                embeddings_shape = (len(metadata_df), backbone_output_size)
+                embeddings_ds = h5_file.create_dataset(
+                    "backbone_embeddings",
+                    shape=embeddings_shape,
+                    dtype=np.float32,
+                    compression="lzf",
                 )
 
-            self.logger.info(
-                f"Backbone embeddings precomputed and stored ({total_written} total embeddings)."
-            )
+                total_written = 0
+                batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".npz")])
+                self.logger.info(f"Found {len(batch_files)} batch files to merge")
+                
+                for batch_file in batch_files:
+                    batch_path = os.path.join(temp_dir, batch_file)
+                    
+                    # Load batch data
+                    data = np.load(batch_path)
+                    indices = data["indices"]
+                    embeddings = data["embeddings"]
+                    
+                    # Write to HDF5
+                    embeddings_ds[indices] = embeddings
+                    total_written += len(indices)
+                    
+                    # Clean up batch file
+                    os.remove(batch_path)
+                
+                # Verify predictions were written
+                if total_written == 0:
+                    raise RuntimeError(
+                        "No embeddings were computed. Check that the dataset is not empty "
+                        "and that images can be loaded successfully."
+                    )
+
+                self.logger.info(
+                    f"Backbone embeddings precomputed and stored ({total_written} total embeddings)."
+                )
 
         finally:
             # Clean up temporary directory
