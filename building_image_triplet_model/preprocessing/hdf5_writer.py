@@ -46,6 +46,8 @@ class HDF5Writer:
 
     def initialize_hdf5(self, n_images: int, metadata_df: pd.DataFrame):
         """Initialize HDF5 file with proper chunking and compression for metadata."""
+        # Ensure parent directory exists before creating HDF5 file
+        self.config.output_file.parent.mkdir(parents=True, exist_ok=True)
         f = h5py.File(self.config.output_file, "w")
         f.create_group("images")
         f.create_group("metadata")

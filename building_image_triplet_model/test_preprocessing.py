@@ -174,7 +174,7 @@ def test_backbone_inference_predict_step(sample_config):
     assert result["embeddings"].shape[0] == batch_size
     assert result["embeddings"].shape[1] == module.backbone_output_size
     assert torch.equal(result["indices"], indices)
-    
+
     # Check that invalid image has zero embedding
     assert torch.all(result["embeddings"][1] == 0)
 
@@ -186,7 +186,9 @@ def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, t
 
     from pytorch_lightning import Trainer
 
-    from building_image_triplet_model.preprocessing.embeddings import HDF5PredictionWriter
+    from building_image_triplet_model.preprocessing.embeddings import (
+        HDF5PredictionWriter,
+    )
 
     # Create Lightning components
     lightning_module = BackboneInferenceModule(sample_config)
@@ -248,3 +250,48 @@ def test_end_to_end_multigpu_preprocessing_cpu(sample_metadata, sample_config, t
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
+
+def test_hdf5_creation_creates_parent_directory(tmp_path):
+    """Test that HDF5Writer creates parent directory if it doesn't exist."""
+    from building_image_triplet_model.preprocessing.hdf5_writer import HDF5Writer
+
+    # Create an output path with a non-existent parent directory
+    output_file = tmp_path / "nonexistent" / "subdir" / "output.h5"
+
+    # Verify parent directory doesn't exist initially
+    assert not output_file.parent.exists()
+
+    # Create config
+    config = ProcessingConfig(
+        input_dir=tmp_path / "input",
+        output_file=output_file,
+        n_samples=None,
+        batch_size=10,
+        num_workers=1,
+        image_size=224,
+        feature_model="resnet18",
+    )
+
+    # Create minimal metadata
+    metadata_df = pd.DataFrame(
+        {
+            "DatasetID": [1],
+            "TargetID": [1],
+        }
+    )
+
+    # Initialize HDF5 file - should create parent directory
+    writer = HDF5Writer(config)
+    h5_file = writer.initialize_hdf5(n_images=1, metadata_df=metadata_df)
+
+    # Verify file and directory were created
+    assert output_file.exists()
+    assert output_file.parent.exists()
+
+    # Verify HDF5 structure
+    assert "images" in h5_file
+    assert "metadata" in h5_file
+    assert "splits" in h5_file
+
+    # Clean up
+    h5_file.close()
