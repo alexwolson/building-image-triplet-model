@@ -326,7 +326,8 @@ class EmbeddingComputer:
                     )
 
                 self.logger.info(
-                    f"Backbone embeddings precomputed and stored ({total_written} total embeddings)."
+                    f"Backbone embeddings precomputed and stored "
+                    f"({total_written} total embeddings)."
                 )
 
         finally:
