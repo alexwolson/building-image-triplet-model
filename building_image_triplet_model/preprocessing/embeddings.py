@@ -233,17 +233,31 @@ class EmbeddingComputer:
         conflicts, then merges all results back into the main HDF5 file.
         
         Args:
-            h5_path: Path to the HDF5 file. The file must exist but will be opened 
-                     in append mode after multi-GPU inference completes.
+            h5_path: Path to the HDF5 file. The file MUST already exist and must 
+                     contain the basic structure (created by HDF5Writer.initialize_hdf5).
+                     It will be opened in append mode after multi-GPU inference completes.
             metadata_df: DataFrame containing image metadata.
+        
+        Raises:
+            FileNotFoundError: If the HDF5 file does not exist.
+            RuntimeError: If no embeddings were computed successfully.
         
         Note:
             This method does NOT accept an open HDF5 file handle to avoid issues with
             distributed training. The file is opened only after PyTorch Lightning
             completes its multi-GPU inference to prevent file descriptor inheritance
-            in worker processes.
+            in worker processes. The caller (DatasetProcessor) must close the file
+            before calling this method and reopen it afterward.
         """
         self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
+
+        # Verify HDF5 file exists before proceeding
+        h5_path = Path(h5_path)
+        if not h5_path.exists():
+            raise FileNotFoundError(
+                f"HDF5 file must exist before calling precompute_backbone_embeddings. "
+                f"File not found: {h5_path}"
+            )
 
         # Create Lightning module and datamodule
         lightning_module = BackboneInferenceModule(self.config)
