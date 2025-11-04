@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess-dataset
 #SBATCH --account=def-bussmann
-#SBATCH --gpus-per-node=4              # GPU needed for backbone embedding computation
-#SBATCH --cpus-per-task=16              # 8 cores for parallel image processing (adjust based on num_workers)
-#SBATCH --mem=64G                      # 32GB for loading images and embeddings in memory
-#SBATCH --time=48:00:00                # 72 hours (preprocessing can be long-running)
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1              # Single GPU is sufficient for backbone embedding computation
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=16             # 16 cores for parallel image processing (adjust based on num_workers)
+#SBATCH --mem=64G                      # 64GB for loading images and embeddings in memory
+#SBATCH --time=48:00:00                # 48 hours (preprocessing can be long-running)
 #SBATCH --output=slurm-preprocess-%j.out  # Job output log
 #SBATCH --error=slurm-preprocess-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
@@ -42,6 +44,8 @@ echo "=========================================="
 # Load modules (Narval cluster - no internet access) - suppress Lmod informational messages
 # NOTE: These module versions must match those in setup_narval_env.sh to ensure consistency
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
+
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 
 # Define paths
 TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/"
@@ -183,9 +187,6 @@ data:
   num_workers: 8
   feature_model: "vit_pe_spatial_base_patch16_512.fb"
   image_size: 512
-  devices: "auto"
-  accelerator: "auto"
-  strategy: "auto"
   # Optional: n_samples and n_images for limiting dataset size
   # n_samples: null
   # n_images: null
@@ -204,8 +205,10 @@ echo "[$(date)] Starting preprocessing pipeline..."
 
 cd "${PROJECT_DIR}"
 
-# Use the Python interpreter from the pre-created virtual environment directly
-.venv/bin/python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
+srun --ntasks=1 \
+     --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
+     --gpus="${SLURM_GPUS_PER_NODE:-1}" \
+     .venv/bin/python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
 echo ""

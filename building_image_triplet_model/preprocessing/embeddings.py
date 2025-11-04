@@ -1,18 +1,14 @@
 """Embedding computation for geo and backbone features."""
 
 import logging
-import os
 from pathlib import Path
-import shutil
-from typing import Any, Dict, List, Tuple
+from typing import Tuple
 
 from PIL import Image
 import h5py
 import numpy as np
 import pandas as pd
 import psutil
-from pytorch_lightning import LightningDataModule, LightningModule, Trainer
-from pytorch_lightning.callbacks import BasePredictionWriter
 from scipy.spatial import distance as sdist
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -49,18 +45,14 @@ class ImageEmbeddingDataset(Dataset):
         return len(self.metadata_df)
 
     def _build_image_path(self, row: pd.Series) -> Path:
-        """Construct absolute image path from metadata row.
-        
-        This is a simplified version that doesn't require MetadataManager,
-        avoiding cache file conflicts in distributed training.
-        """
+        """Construct absolute image path from metadata row."""
         if "Subpath" in row and isinstance(row["Subpath"], str):
             return self.config.input_dir / row["Subpath"] / row["Image filename"]
-        # Fallback for legacy CSV-based structure (not used anymore but kept for safety)
+        # Fallback for legacy CSV-based structure (kept for safety)
         return self.config.input_dir / str(row["Subdirectory"]).zfill(4) / row["Image filename"]
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, bool]:
-        """Return (image_tensor, index, is_valid) tuple."""
+    def __getitem__(self, idx: int):
+        """Return (image_tensor, index, is_valid)."""
         row = self.metadata_df.iloc[idx]
         img_path = self._build_image_path(row)
 
@@ -69,147 +61,10 @@ class ImageEmbeddingDataset(Dataset):
                 tensor_img = self.transform(im.convert("RGB"))
             return tensor_img, idx, True
         except (FileNotFoundError, OSError, IOError) as e:
-            # Return zero tensor for missing or corrupted images
-            # Mark this as invalid so we can skip backbone processing
             logger.warning(f"Skipping image {img_path} due to error: {e}")
             self.failed_indices.add(idx)
             zero_tensor = torch.zeros(3, self.config.image_size, self.config.image_size)
             return zero_tensor, idx, False
-
-
-class ImageEmbeddingDataModule(LightningDataModule):
-    """DataModule for loading images during embedding computation."""
-
-    def __init__(self, metadata_df: pd.DataFrame, config: ProcessingConfig):
-        super().__init__()
-        self.metadata_df = metadata_df
-        self.config = config
-        self.dataset = None
-
-    def setup(self, stage: str | None = None) -> None:
-        """Set up the dataset.
-
-        Args:
-            stage: The stage of training/evaluation. Only 'predict' stage is supported.
-
-        Raises:
-            ValueError: If stage is not None or 'predict'.
-        """
-        if stage not in (None, "predict"):
-            raise ValueError(
-                f"Stage '{stage}' not supported in ImageEmbeddingDataModule. "
-                f"Only 'predict' stage is allowed."
-            )
-        self.dataset = ImageEmbeddingDataset(self.metadata_df, self.config)
-
-    def predict_dataloader(self) -> DataLoader:
-        """Return dataloader for prediction/inference."""
-        return DataLoader(
-            self.dataset,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            shuffle=False,  # Important: maintain order for correct indexing
-            pin_memory=True,
-            persistent_workers=self.config.num_workers > 0,
-        )
-
-
-class BackboneInferenceModule(LightningModule):
-    """Lightning module for backbone inference (forward pass only)."""
-
-    def __init__(self, config: ProcessingConfig):
-        super().__init__()
-        self.config = config
-
-        # Create backbone model
-        self.backbone = create_backbone_model(
-            config.feature_model, pretrained=True, device=None  # Lightning handles device
-        )
-        self.backbone.eval()
-
-        # Get backbone output size
-        self.backbone_output_size = get_backbone_output_size(
-            config.feature_model, backbone_model=self.backbone
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through backbone."""
-        with torch.no_grad():
-            return self.backbone(x)
-
-    def predict_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Perform a prediction step to compute embeddings for a batch of images.
-
-        Args:
-            batch: A tuple containing (images, indices, is_valid), where
-                images (torch.Tensor): Batch of input images.
-                indices (torch.Tensor): Indices of the images in the dataset.
-                is_valid (torch.Tensor): Boolean mask indicating valid images.
-            batch_idx: Index of the current batch.
-
-        Returns:
-            Dict[str, torch.Tensor]: A dictionary with keys:
-                - "embeddings": The computed embeddings for the batch (zero for invalid images).
-                - "indices": The indices of the images in the batch.
-        """
-        images, indices, is_valid = batch
-
-        # Only process valid images through backbone
-        # For invalid images, return zero embeddings directly
-        embeddings = torch.zeros(images.shape[0], self.backbone_output_size, device=images.device)
-
-        if is_valid.any():
-            valid_mask = is_valid.bool()
-            valid_images = images[valid_mask]
-            embeddings[valid_mask] = self(valid_images)
-
-        return {"embeddings": embeddings.cpu(), "indices": indices.cpu()}
-
-
-class HDF5PredictionWriter(BasePredictionWriter):
-    """Writes predictions to temporary numpy files to avoid concurrent HDF5 writes.
-    
-    In distributed mode, each rank writes batches to separate numpy files.
-    These are merged into the HDF5 file after all predictions complete.
-    """
-
-    def __init__(self, output_dir: str, write_interval: str = "batch"):
-        super().__init__(write_interval)
-        self.output_dir = output_dir
-        self.batches_written = 0
-
-    def write_on_batch_end(
-        self,
-        trainer: Trainer,
-        pl_module: LightningModule,
-        prediction: Any,
-        batch_indices: List[int],
-        batch: Any,
-        batch_idx: int,
-        dataloader_idx: int,
-    ) -> None:
-        """Write each batch to a separate temporary numpy file."""
-        indices = prediction["indices"].cpu().numpy()
-        embeddings = prediction["embeddings"].cpu().numpy()
-
-        # Create output directory if it doesn't exist
-        os.makedirs(self.output_dir, exist_ok=True)
-
-        # Save to batch-specific file (includes rank to avoid conflicts)
-        output_file = os.path.join(
-            self.output_dir,
-            f"batch_rank{trainer.global_rank}_batch{batch_idx}.npz"
-        )
-        np.savez_compressed(
-            output_file,
-            indices=indices,
-            embeddings=embeddings
-        )
-        
-        self.batches_written += 1
 
 
 class EmbeddingComputer:
@@ -218,28 +73,6 @@ class EmbeddingComputer:
     def __init__(self, config: ProcessingConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
-
-    @staticmethod
-    def _get_rank_from_env() -> int | None:
-        """Return the distributed global rank inferred from environment variables."""
-        for key in ("RANK", "SLURM_PROCID", "LOCAL_RANK"):
-            value = os.environ.get(key)
-            if value is None:
-                continue
-            try:
-                return int(value)
-            except ValueError:
-                continue
-        return None
-
-    def get_global_rank(self) -> int | None:
-        """Return the inferred global rank for this process, if available."""
-        return self._get_rank_from_env()
-
-    def is_global_zero_process(self) -> bool:
-        """Return True when running on the primary (rank 0) process."""
-        rank = self.get_global_rank()
-        return rank is None or rank == 0
 
     def compute_geo_embeddings(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """Return (sorted_target_ids, embeddings) for geo metric."""
@@ -251,177 +84,68 @@ class EmbeddingComputer:
             .loc[targets]
             .values.astype(np.float32)
         )
-        self.logger.info(f"Finished embeddings for geo metric. Shape: {embeddings.shape}")
+        self.logger.info("Finished embeddings for geo metric. Shape: %s", embeddings.shape)
         return targets, embeddings
 
     def precompute_backbone_embeddings(
-        self, h5_path: Path | str, metadata_df: pd.DataFrame
-    ) -> bool:
-        """Precompute backbone embeddings using PyTorch Lightning multi-GPU support.
-        
-        Uses temporary numpy files (one per batch) to avoid HDF5 multi-process write 
-        conflicts, then merges all results back into the main HDF5 file.
-        
-        Args:
-            h5_path: Path to the HDF5 file. The file MUST already exist and must 
-                     contain the basic structure (created by HDF5Writer.initialize_hdf5).
-                     It will be opened in append mode after multi-GPU inference completes.
-            metadata_df: DataFrame containing image metadata.
-        
-        Raises:
-            FileNotFoundError: If the HDF5 file does not exist.
-            ValueError: If backbone_embeddings dataset exists with incorrect shape or dtype.
-            RuntimeError: If no embeddings were computed successfully.
-
-        Note:
-            This method does NOT accept an open HDF5 file handle to avoid issues with
-            distributed training. The file is opened only after PyTorch Lightning
-            completes its multi-GPU inference to prevent file descriptor inheritance
-            in worker processes. The caller (DatasetProcessor) must close the file
-            before calling this method and reopen it afterward.
-
-        Returns:
-            bool: True if the caller is the primary process (rank 0) and should
-                  continue with downstream processing, False for worker ranks that
-                  should exit after participating in inference.
-        """
-        self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
-
-        # Verify HDF5 file exists before proceeding
-        h5_path = Path(h5_path)
-        if not h5_path.exists():
-            raise FileNotFoundError(
-                f"HDF5 file must exist before calling precompute_backbone_embeddings. "
-                f"File not found: {h5_path}"
-            )
-
-        # Create Lightning module and datamodule
-        lightning_module = BackboneInferenceModule(self.config)
-        data_module = ImageEmbeddingDataModule(metadata_df, self.config)
-        global_rank = self.get_global_rank()
-        is_global_zero = self.is_global_zero_process()
-        rank_label = str(global_rank) if global_rank is not None else "0"
-
-        # Get backbone output size
-        backbone_output_size = lightning_module.backbone_output_size
-        self.logger.info(f"Backbone output size: {backbone_output_size}")
-
-        # Create temporary directory for batch outputs
-        temp_dir = h5_path.parent / f"{h5_path.stem}_backbone_tmp"
-        if is_global_zero and temp_dir.exists():
-            shutil.rmtree(temp_dir)
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        self.logger.info(
-            "Using temporary directory: %s (rank=%s)",
-            temp_dir,
-            rank_label,
+        self,
+        h5_file: h5py.File,
+        metadata_df: pd.DataFrame,
+    ) -> None:
+        """Compute backbone embeddings on a single device and store them in the HDF5 file."""
+        dataset = ImageEmbeddingDataset(metadata_df, self.config)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            shuffle=False,
+            pin_memory=torch.cuda.is_available(),
+            persistent_workers=self.config.num_workers > 0,
         )
-        
-        try:
-            # Create prediction writer that saves each batch to a numpy file
-            pred_writer = HDF5PredictionWriter(str(temp_dir), write_interval="batch")
 
-            # Configure trainer for multi-GPU inference
-            self.logger.info(
-                f"Configuring trainer with devices={self.config.devices}, "
-                f"accelerator={self.config.accelerator}, strategy={self.config.strategy}"
-            )
-            trainer = Trainer(
-                accelerator=self.config.accelerator,
-                devices=self.config.devices,
-                strategy=self.config.strategy,
-                logger=False,  # Disable logging for inference
-                enable_checkpointing=False,
-                enable_progress_bar=True,
-                enable_model_summary=False,
-                callbacks=[pred_writer],
-            )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.logger.info("Computing backbone embeddings on device: %s", device)
 
-            # Run predictions - results are written to temporary numpy files
-            # IMPORTANT: HDF5 file is NOT open during this step to avoid distributed
-            # training issues with file descriptor inheritance
-            self.logger.info("Running backbone inference across multiple GPUs...")
-            trainer.predict(lightning_module, datamodule=data_module)
-            try:
-                trainer.strategy.barrier()
-            except AttributeError:
-                pass
+        backbone = create_backbone_model(self.config.feature_model, pretrained=True, device=device)
+        backbone.eval()
+        backbone_output_size = get_backbone_output_size(
+            self.config.feature_model,
+            backbone_model=backbone,
+        )
+        self.logger.info("Backbone output size: %s", backbone_output_size)
 
-            if not is_global_zero:
-                self.logger.info(
-                    "Rank %s completed backbone inference and will skip HDF5 merge.",
-                    rank_label,
-                )
-                return False
+        embeddings_ds = h5_file.create_dataset(
+            "backbone_embeddings",
+            shape=(len(metadata_df), backbone_output_size),
+            dtype=np.float32,
+            compression="lzf",
+        )
+        h5_file.attrs["backbone_output_size"] = backbone_output_size
 
-            # Now open HDF5 file in append mode and merge batch results
-            # This happens AFTER all worker processes have been cleaned up
-            self.logger.info("Merging batch results into HDF5...")
-            with h5py.File(h5_path, "a") as h5_file:
-                # Store the backbone output size in the HDF5 file
-                h5_file.attrs["backbone_output_size"] = backbone_output_size
+        progress = tqdm(dataloader, **get_tqdm_params("Computing backbone embeddings"))
+        backbone.eval()
 
-                # Create HDF5 dataset for embeddings (or validate existing one)
-                embeddings_shape = (len(metadata_df), backbone_output_size)
-                if "backbone_embeddings" in h5_file:
-                    # Dataset already exists - validate it has correct shape and dtype
-                    embeddings_ds = h5_file["backbone_embeddings"]
-                    if embeddings_ds.shape != embeddings_shape:
-                        raise ValueError(
-                            f"Existing backbone_embeddings dataset has incorrect shape. "
-                            f"Expected {embeddings_shape}, got {embeddings_ds.shape}"
-                        )
-                    if embeddings_ds.dtype != np.float32:
-                        raise ValueError(
-                            f"Existing backbone_embeddings dataset has incorrect dtype. "
-                            f"Expected float32, got {embeddings_ds.dtype}"
-                        )
-                    self.logger.warning(
-                        "Overwriting existing backbone_embeddings dataset with correct shape/dtype"
-                    )
-                else:
-                    embeddings_ds = h5_file.create_dataset(
-                        "backbone_embeddings",
-                        shape=embeddings_shape,
-                        dtype=np.float32,
-                        compression="lzf",
-                    )
-
-                total_written = 0
-                batch_files = sorted(temp_dir.glob("*.npz"))
-                self.logger.info(f"Found {len(batch_files)} batch files to merge")
-                
-                for batch_path in batch_files:
-                    # Load batch data
-                    data = np.load(batch_path)
-                    indices = data["indices"]
-                    embeddings = data["embeddings"]
-                    
-                    # Write to HDF5
-                    embeddings_ds[indices] = embeddings
-                    total_written += len(indices)
-                    
-                    # Clean up batch file
-                    batch_path.unlink()
-                
-                # Verify predictions were written
-                if total_written == 0:
-                    raise RuntimeError(
-                        "No embeddings were computed. Check that the dataset is not empty "
-                        "and that images can be loaded successfully."
-                    )
-
-                self.logger.info(
-                    f"Backbone embeddings precomputed and stored "
-                    f"({total_written} total embeddings)."
+        with torch.no_grad():
+            for images, indices, is_valid in progress:
+                indices_np = indices.cpu().numpy() if isinstance(indices, torch.Tensor) else np.asarray(indices)
+                images = images.to(device, non_blocking=True)
+                valid_mask = torch.as_tensor(is_valid, dtype=torch.bool, device=device)
+                batch_embeddings = torch.zeros(
+                    (images.shape[0], backbone_output_size),
+                    device=device,
                 )
 
-            return True
-        finally:
-            # Clean up temporary directory
-            if is_global_zero and temp_dir.exists():
-                shutil.rmtree(temp_dir)
-                self.logger.info(f"Cleaned up temporary directory: {temp_dir}")
+                if valid_mask.any():
+                    valid_embeddings = backbone(images[valid_mask])
+                    batch_embeddings[valid_mask] = valid_embeddings
+
+                embeddings_ds[indices_np] = batch_embeddings.cpu().numpy()
+
+        if dataset.failed_indices:
+            self.logger.warning(
+                "Encountered %d images that could not be processed.",
+                len(dataset.failed_indices),
+            )
 
     def compute_and_store_difficulty_scores_for_split(
         self,
@@ -433,34 +157,35 @@ class EmbeddingComputer:
     ) -> None:
         """Slice cached embeddings for the split and store distance matrix."""
         self.logger.info(
-            f"Computing distance matrix for split='{split_name}', "
-            f"|targets|={len(split_target_ids)}"
+            "Computing distance matrix for split='%s', |targets|=%d",
+            split_name,
+            len(split_target_ids),
         )
-        # Ensure target order matches cached embeddings order
+
         target_rows = np.searchsorted(all_targets, np.sort(split_target_ids))
         embeddings = embeddings_all[target_rows]
         n = embeddings.shape[0]
         meta_grp = h5_file["metadata"]
-        # Store target_id_order only once per split to avoid duplicates
+
         tgt_key = f"target_id_order_{split_name}"
         if tgt_key not in meta_grp:  # type: ignore[operator]
-            meta_grp.create_dataset(  # type: ignore
+            meta_grp.create_dataset(  # type: ignore[attr-defined]
                 tgt_key,
                 data=np.sort(split_target_ids).astype(np.int64),
                 compression="lzf",
             )
-        # Get current process for memory monitoring
+
         process = psutil.Process()
-        k = self.config.knn_k
-        idx_ds = meta_grp.create_dataset(  # type: ignore
+        k = min(50, max(1, n - 1))
+        idx_ds = meta_grp.create_dataset(  # type: ignore[attr-defined]
             f"knn_indices_geo_{split_name}",
             shape=(n, k),
-            dtype="int32",
+            dtype=np.int32,
             chunks=(min(1024, n), k),
             compression="gzip",
             compression_opts=4,
         )
-        dist_ds = meta_grp.create_dataset(  # type: ignore
+        dist_ds = meta_grp.create_dataset(  # type: ignore[attr-defined]
             f"knn_distances_geo_{split_name}",
             shape=(n, k),
             dtype="float16",
@@ -468,6 +193,7 @@ class EmbeddingComputer:
             compression="gzip",
             compression_opts=4,
         )
+
         chunk_rows = 1024
         start = 0
         while start < n:
@@ -477,33 +203,37 @@ class EmbeddingComputer:
                     np.float32
                 )
             except MemoryError:
-                # Reduce chunk size and retry
                 if chunk_rows <= 128:
-                    raise  # cannot reduce further
+                    raise
                 chunk_rows //= 2
                 self.logger.warning(
-                    f"MemoryError computing block {start}:{end}. "
-                    f"Reducing chunk_rows to {chunk_rows}."
+                    "MemoryError computing block %d:%d. Reducing chunk_rows to %d.",
+                    start,
+                    end,
+                    chunk_rows,
                 )
-                continue  # retry with smaller chunk
+                continue
 
-            # Apply log transformation for geo distance
             block = np.log1p(block, dtype=np.float32)
 
-            # For each row in block, select k nearest neighbours (excluding self)
             for row_idx, row in enumerate(block):
                 global_row = start + row_idx
-                row[global_row] = np.inf  # set self-distance high
+                row[global_row] = np.inf
                 nearest_idx = np.argpartition(row, k)[:k]
                 nearest_dist = row[nearest_idx]
                 order = np.argsort(nearest_dist)
                 idx_ds[global_row] = nearest_idx[order].astype(np.int32)
                 dist_ds[global_row] = nearest_dist[order].astype(np.float16)
 
-            # Log memory usage periodically
             if (start // chunk_rows) % 10 == 0:
                 mem_gb = process.memory_info().rss / (1024**3)
-                self.logger.info(f"[RAM] Process RSS: {mem_gb:.2f} GB | processed rows: {end}/{n}")
+                self.logger.info(
+                    "[RAM] Process RSS: %.2f GB | processed rows: %d/%d",
+                    mem_gb,
+                    end,
+                    n,
+                )
 
             start = end
-        self.logger.info(f"{split_name}: stored geo distance matrix of shape {n}×{n}.")
+
+        self.logger.info("%s: stored geo distance matrix of shape %d×%d.", split_name, n, n)

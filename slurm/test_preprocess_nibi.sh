@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=test-preprocess-dataset
 #SBATCH --account=def-bussmann
-#SBATCH --gpus-per-node=2              # 2 GPUs for testing (reduced from 4)
-#SBATCH --cpus-per-task=8              # 8 cores for parallel image processing (reduced from 16)
-#SBATCH --mem=32G                      # 32GB for loading images and embeddings in memory (reduced from 64G)
-#SBATCH --time=04:00:00                # 4 hours for testing (reduced from 48)
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1              # Single GPU is sufficient for backbone embeddings
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8              # 8 cores for parallel image processing
+#SBATCH --mem=32G                      # 32GB for loading images and embeddings in memory
+#SBATCH --time=04:00:00                # 4 hours for testing
 #SBATCH --output=slurm-test-preprocess-%j.out  # Job output log
 #SBATCH --error=slurm-test-preprocess-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
@@ -24,6 +26,8 @@ echo "=========================================="
 
 # Load modules (Nibi cluster) - suppress Lmod informational messages
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
+
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 
 # Define paths
 TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/dataset_unaligned"
@@ -167,9 +171,6 @@ data:
   num_workers: 8
   feature_model: "vit_pe_spatial_base_patch16_512.fb"
   image_size: 512
-  devices: "auto"
-  accelerator: "auto"
-  strategy: "auto"
   # Optional: n_samples and n_images for limiting dataset size
   # n_samples: null
   # n_images: null
@@ -188,7 +189,10 @@ echo "[$(date)] Starting preprocessing pipeline..."
 
 cd "${PROJECT_DIR}"
 
-uv run python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
+srun --ntasks=1 \
+     --cpus-per-task="${SLURM_CPUS_PER_TASK:-8}" \
+     --gpus="${SLURM_GPUS_PER_NODE:-1}" \
+     uv run python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
 echo ""
