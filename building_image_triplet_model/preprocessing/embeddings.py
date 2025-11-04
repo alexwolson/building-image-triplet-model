@@ -4,7 +4,6 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import tempfile
 from typing import Any, Dict, List, Tuple
 
 from PIL import Image
@@ -220,6 +219,28 @@ class EmbeddingComputer:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
+    @staticmethod
+    def _get_rank_from_env() -> int | None:
+        """Return the distributed global rank inferred from environment variables."""
+        for key in ("RANK", "SLURM_PROCID", "LOCAL_RANK"):
+            value = os.environ.get(key)
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except ValueError:
+                continue
+        return None
+
+    def get_global_rank(self) -> int | None:
+        """Return the inferred global rank for this process, if available."""
+        return self._get_rank_from_env()
+
+    def is_global_zero_process(self) -> bool:
+        """Return True when running on the primary (rank 0) process."""
+        rank = self.get_global_rank()
+        return rank is None or rank == 0
+
     def compute_geo_embeddings(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """Return (sorted_target_ids, embeddings) for geo metric."""
         self.logger.info("Computing embeddings for geo metric...")
@@ -235,7 +256,7 @@ class EmbeddingComputer:
 
     def precompute_backbone_embeddings(
         self, h5_path: Path | str, metadata_df: pd.DataFrame
-    ) -> None:
+    ) -> bool:
         """Precompute backbone embeddings using PyTorch Lightning multi-GPU support.
         
         Uses temporary numpy files (one per batch) to avoid HDF5 multi-process write 
@@ -251,13 +272,18 @@ class EmbeddingComputer:
             FileNotFoundError: If the HDF5 file does not exist.
             ValueError: If backbone_embeddings dataset exists with incorrect shape or dtype.
             RuntimeError: If no embeddings were computed successfully.
-        
+
         Note:
             This method does NOT accept an open HDF5 file handle to avoid issues with
             distributed training. The file is opened only after PyTorch Lightning
             completes its multi-GPU inference to prevent file descriptor inheritance
             in worker processes. The caller (DatasetProcessor) must close the file
             before calling this method and reopen it afterward.
+
+        Returns:
+            bool: True if the caller is the primary process (rank 0) and should
+                  continue with downstream processing, False for worker ranks that
+                  should exit after participating in inference.
         """
         self.logger.info("Precomputing backbone embeddings with multi-GPU support...")
 
@@ -272,18 +298,28 @@ class EmbeddingComputer:
         # Create Lightning module and datamodule
         lightning_module = BackboneInferenceModule(self.config)
         data_module = ImageEmbeddingDataModule(metadata_df, self.config)
+        global_rank = self.get_global_rank()
+        is_global_zero = self.is_global_zero_process()
+        rank_label = str(global_rank) if global_rank is not None else "0"
 
         # Get backbone output size
         backbone_output_size = lightning_module.backbone_output_size
         self.logger.info(f"Backbone output size: {backbone_output_size}")
 
         # Create temporary directory for batch outputs
-        temp_dir = tempfile.mkdtemp(prefix="embeddings_")
-        self.logger.info(f"Using temporary directory: {temp_dir}")
+        temp_dir = h5_path.parent / f"{h5_path.stem}_backbone_tmp"
+        if is_global_zero and temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        self.logger.info(
+            "Using temporary directory: %s (rank=%s)",
+            temp_dir,
+            rank_label,
+        )
         
         try:
             # Create prediction writer that saves each batch to a numpy file
-            pred_writer = HDF5PredictionWriter(temp_dir, write_interval="batch")
+            pred_writer = HDF5PredictionWriter(str(temp_dir), write_interval="batch")
 
             # Configure trainer for multi-GPU inference
             self.logger.info(
@@ -306,6 +342,17 @@ class EmbeddingComputer:
             # training issues with file descriptor inheritance
             self.logger.info("Running backbone inference across multiple GPUs...")
             trainer.predict(lightning_module, datamodule=data_module)
+            try:
+                trainer.strategy.barrier()
+            except AttributeError:
+                pass
+
+            if not is_global_zero:
+                self.logger.info(
+                    "Rank %s completed backbone inference and will skip HDF5 merge.",
+                    rank_label,
+                )
+                return False
 
             # Now open HDF5 file in append mode and merge batch results
             # This happens AFTER all worker processes have been cleaned up
@@ -341,12 +388,10 @@ class EmbeddingComputer:
                     )
 
                 total_written = 0
-                batch_files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".npz")])
+                batch_files = sorted(temp_dir.glob("*.npz"))
                 self.logger.info(f"Found {len(batch_files)} batch files to merge")
                 
-                for batch_file in batch_files:
-                    batch_path = os.path.join(temp_dir, batch_file)
-                    
+                for batch_path in batch_files:
                     # Load batch data
                     data = np.load(batch_path)
                     indices = data["indices"]
@@ -357,7 +402,7 @@ class EmbeddingComputer:
                     total_written += len(indices)
                     
                     # Clean up batch file
-                    os.remove(batch_path)
+                    batch_path.unlink()
                 
                 # Verify predictions were written
                 if total_written == 0:
@@ -371,9 +416,10 @@ class EmbeddingComputer:
                     f"({total_written} total embeddings)."
                 )
 
+            return True
         finally:
             # Clean up temporary directory
-            if os.path.exists(temp_dir):
+            if is_global_zero and temp_dir.exists():
                 shutil.rmtree(temp_dir)
                 self.logger.info(f"Cleaned up temporary directory: {temp_dir}")
 
