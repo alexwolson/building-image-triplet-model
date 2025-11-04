@@ -164,7 +164,7 @@ data:
   input_dir: "${EXTRACT_DIR}"
   hdf5_path: "${OUTPUT_HDF5}"
   batch_size: 100
-  num_workers: 4
+  num_workers: 8
   feature_model: "vit_pe_spatial_base_patch16_512.fb"
   image_size: 512
   devices: "auto"
