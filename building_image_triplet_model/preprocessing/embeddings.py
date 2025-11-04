@@ -23,7 +23,6 @@ from tqdm import tqdm
 
 from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_params
 from .config import ProcessingConfig
-from .metadata import MetadataManager
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -35,7 +34,6 @@ class ImageEmbeddingDataset(Dataset):
     def __init__(self, metadata_df: pd.DataFrame, config: ProcessingConfig):
         self.metadata_df = metadata_df
         self.config = config
-        self.metadata_manager = MetadataManager(config)
         self.failed_indices = set()  # Track indices of failed images
 
         # Image transformations
@@ -51,10 +49,21 @@ class ImageEmbeddingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.metadata_df)
 
+    def _build_image_path(self, row: pd.Series) -> Path:
+        """Construct absolute image path from metadata row.
+        
+        This is a simplified version that doesn't require MetadataManager,
+        avoiding cache file conflicts in distributed training.
+        """
+        if "Subpath" in row and isinstance(row["Subpath"], str):
+            return self.config.input_dir / row["Subpath"] / row["Image filename"]
+        # Fallback for legacy CSV-based structure (not used anymore but kept for safety)
+        return self.config.input_dir / str(row["Subdirectory"]).zfill(4) / row["Image filename"]
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, bool]:
         """Return (image_tensor, index, is_valid) tuple."""
         row = self.metadata_df.iloc[idx]
-        img_path = self.metadata_manager.build_image_path(row)
+        img_path = self._build_image_path(row)
 
         try:
             with Image.open(img_path) as im:
