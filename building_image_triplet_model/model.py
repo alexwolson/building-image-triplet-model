@@ -80,7 +80,7 @@ class GeoTripletNet(LightningModule):
             else nn.Linear(in_features, embedding_size, bias=False)
         )
         # Final normalization after residual connection
-        self.final_norm = nn.LayerNorm(embedding_size)
+        self.final_norm = nn.LayerNorm(embedding_size, elementwise_affine=False)
 
         # Loss function (cosine distance on normalized embeddings)
         self.triplet_loss: nn.Module = nn.TripletMarginWithDistanceLoss(
