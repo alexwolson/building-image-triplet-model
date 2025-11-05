@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1                   # Single GPU is sufficient for backbone embedding computation
 #SBATCH --cpus-per-task=16             # 16 cores for parallel image processing (adjust based on num_workers)
 #SBATCH --mem=64G                      # 64GB for loading images and embeddings in memory
-#SBATCH --time=48:00:00                # 48 hours (preprocessing can be long-running)
+#SBATCH --time=72:00:00                # 72 hours (preprocessing can be long-running)
 #SBATCH --output=preprocess_nibi-%j.out  # Job output log
 #SBATCH --error=preprocess_nibi-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
