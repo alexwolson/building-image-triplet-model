@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 from rich.console import Console
 import yaml
@@ -22,7 +22,7 @@ class ProcessingConfig:
     image_size: int = 224
     num_workers: int = 4
     feature_model: str = "resnet18"  # used for backbone / training
-    chunk_size: Tuple[int, int, int, int] = (1, 224, 224, 3)
+    chunk_size: tuple[int, int, int, int] = (1, 224, 224, 3)
     knn_k: int = 512  # number of nearest neighbours to store per target
     # Multi-GPU preprocessing settings
     devices: int | str = "auto"  # number of GPUs or "auto"

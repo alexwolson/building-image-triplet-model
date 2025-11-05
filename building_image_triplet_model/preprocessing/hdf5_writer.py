@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import gc
 from itertools import batched
 import logging
-from typing import Iterator, List, Optional
+from typing import Iterator, Optional
 
 import h5py
 import numpy as np
@@ -56,9 +56,9 @@ class HDF5Writer:
 
     def process_image_batch(
         self, batch_rows: pd.DataFrame, executor: ProcessPoolExecutor
-    ) -> List[Optional[np.ndarray]]:
+    ) -> list[Optional[np.ndarray]]:
         """Process a batch of images in parallel using provided executor."""
-        results: List[Optional[np.ndarray]] = []
+        results: list[Optional[np.ndarray]] = []
         metadata_manager = MetadataManager(self.config)
 
         futures = []
@@ -105,10 +105,10 @@ class HDF5Writer:
                 split_name, data=split_targets, compression="lzf"
             )
 
-    def process_and_store_images(self, h5_file, metadata_df: pd.DataFrame) -> List[int]:
+    def process_and_store_images(self, h5_file, metadata_df: pd.DataFrame) -> list[int]:
         """Process images to get valid indices (without storing raw images)."""
         current_idx = 0  # Global row counter in metadata_df order
-        valid_indices: List[int] = []
+        valid_indices: list[int] = []
 
         total_batches = (len(metadata_df) + self.config.batch_size - 1) // self.config.batch_size
 
