@@ -62,6 +62,8 @@ def create_model_and_datamodule(config: dict):
     margin = config["model"].get("margin", 1.0)
     backbone = config["model"].get("backbone", "tf_efficientnetv2_s.in21k_ft_in1k")
     backbone_output_size = config["model"].get("backbone_output_size", None)
+    projection_hidden_dim = config["model"].get("projection_hidden_dim", None)
+    projection_dropout = config["model"].get("projection_dropout", 0.1)
     # Training
     lr = config["train"].get("lr", 1e-4)
     weight_decay = config["train"].get("weight_decay", 1e-4)
@@ -85,6 +87,8 @@ def create_model_and_datamodule(config: dict):
         backbone=backbone,
         difficulty_update_freq=difficulty_update_freq,
         backbone_output_size=backbone_output_size,
+        projection_hidden_dim=projection_hidden_dim,
+        projection_dropout=projection_dropout,
     )
     return model, data_module
 
