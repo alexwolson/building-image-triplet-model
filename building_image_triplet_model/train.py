@@ -112,6 +112,11 @@ def main():
     samples_per_epoch = config["train"].get("samples_per_epoch", 5000)
     batch_size = config["data"].get("batch_size", 32)
     steps_per_epoch = max(1, math.ceil(samples_per_epoch / batch_size))
+    if batch_size > samples_per_epoch:
+        console.print(
+            f"[yellow]Warning: batch_size ({batch_size}) is greater than samples_per_epoch ({samples_per_epoch}). "
+            "This may lead to unexpected training behavior. Please check your configuration.[/yellow]"
+        )
     wandb_logger = WandbLogger(
         project=config["logging"].get("project_name", "geo-triplet-net"),
         name=config["logging"].get("exp_name", None),
