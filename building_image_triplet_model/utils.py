@@ -98,10 +98,7 @@ def build_backbone_transform(backbone_name: str, image_size: int):
         A torchvision-compatible transform pipeline.
     """
     model = timm.create_model(backbone_name, pretrained=False, num_classes=0)
-    try:
-        data_cfg = resolve_data_config({"input_size": (3, image_size, image_size)}, model=model)
-    finally:
-        del model
+    data_cfg = resolve_data_config({"input_size": (3, image_size, image_size)}, model=model)
 
     transform = create_transform(**data_cfg, is_training=False)
     return transform
