@@ -79,7 +79,6 @@ class GeoTripletNet(LightningModule):
             if in_features == embedding_size
             else nn.Linear(in_features, embedding_size, bias=False)
         )
-        
         # Final normalization after residual connection
         self.final_norm = nn.LayerNorm(embedding_size)
 
