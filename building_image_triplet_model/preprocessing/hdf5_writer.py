@@ -1,10 +1,12 @@
 """HDF5 file operations for dataset storage."""
 
+import errno
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 import gc
 from itertools import batched
 import logging
+import os
 from typing import Iterator, Optional
 
 import h5py
@@ -48,7 +50,21 @@ class HDF5Writer:
         """Initialize HDF5 file with proper chunking and compression for metadata."""
         # Ensure parent directory exists before creating HDF5 file
         self.config.output_file.parent.mkdir(parents=True, exist_ok=True)
-        f = h5py.File(self.config.output_file, "w")
+        try:
+            f = h5py.File(self.config.output_file, "w")
+        except BlockingIOError as err:
+            # Cluster scratch disks sometimes reject the initial file lock request.
+            if err.errno == errno.EWOULDBLOCK:
+                self.logger.warning(
+                    "Unable to lock %s on first attempt (errno=%s). "
+                    "Disabling HDF5 file locking and retrying once.",
+                    self.config.output_file,
+                    err.errno,
+                )
+                os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+                f = h5py.File(self.config.output_file, "w")
+            else:
+                raise
         f.create_group("images")
         f.create_group("metadata")
         f.create_group("splits")
