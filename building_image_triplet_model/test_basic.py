@@ -12,6 +12,15 @@ from building_image_triplet_model.preprocessing import (
 )
 from building_image_triplet_model.triplet_dataset import GeoTripletDataset
 
+pytestmark = [
+    pytest.mark.filterwarnings(
+        "ignore:You defined a `validation_step` but have no `val_dataloader`:UserWarning"
+    ),
+    pytest.mark.filterwarnings(
+        "ignore:The 'train_dataloader' does not have many workers which may be a bottleneck.:UserWarning"
+    ),
+]
+
 
 class DummyDataset(torch.utils.data.Dataset):
     def __init__(self, n=10, embedding_dim=768):

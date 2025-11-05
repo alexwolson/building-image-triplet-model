@@ -74,7 +74,7 @@ logging:
   checkpoint_dir: "checkpoints"
   offline: false
 model:
-  backbone: "vit_pe_spatial_base_patch16_512.fb"
+  backbone: "vit_base_patch14_dinov2.lvd142m"
   embedding_size: 128
   freeze_backbone: true
   margin: 1.0

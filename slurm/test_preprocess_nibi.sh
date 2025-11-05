@@ -168,8 +168,8 @@ data:
   hdf5_path: "${OUTPUT_HDF5}"
   batch_size: 100
   num_workers: 8
-  feature_model: "vit_pe_spatial_base_patch16_512.fb"
-  image_size: 512
+  feature_model: "vit_base_patch14_dinov2.lvd142m"
+  image_size: 518
   # Optional: n_samples and n_images for limiting dataset size
   # n_samples: null
   # n_images: null
@@ -205,6 +205,79 @@ else
     exit 1
 fi
 
+echo ""
+
+###############################################################################
+# Phase 5b: Validate Output HDF5 Structure
+###############################################################################
+
+echo "[$(date)] Validating output HDF5 structure..."
+
+OUTPUT_HDF5="${OUTPUT_HDF5}" uv run python - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+import h5py
+import numpy as np
+
+path = Path(os.environ["OUTPUT_HDF5"])
+if not path.exists():
+    print(f"[VALIDATION] Missing expected HDF5 file at {path}", file=sys.stderr)
+    sys.exit(1)
+
+with h5py.File(path, "r") as f:
+    required_groups = ["images", "metadata", "splits"]
+    missing = [grp for grp in required_groups if grp not in f]
+    if missing:
+        print(f"[VALIDATION] Missing groups: {missing}", file=sys.stderr)
+        sys.exit(1)
+
+    if "backbone_embeddings" not in f:
+        print("[VALIDATION] Missing 'backbone_embeddings' dataset", file=sys.stderr)
+        sys.exit(1)
+
+    embeddings_shape = f["backbone_embeddings"].shape
+    target_ids = f["metadata"]["TargetID"][:]
+    if embeddings_shape[0] != target_ids.shape[0]:
+        print(
+            "[VALIDATION] Embedding count does not match metadata rows "
+            f"({embeddings_shape[0]} != {target_ids.shape[0]})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    valid_indices = f["images"]["valid_indices"][:]
+    if valid_indices.size == 0:
+        print("[VALIDATION] No valid image indices were stored", file=sys.stderr)
+        sys.exit(1)
+
+    split_counts = {}
+    for split in ("train", "val", "test"):
+        if split in f["splits"]:
+            split_counts[split] = int(f["splits"][split].size)
+        else:
+            print(f"[VALIDATION] Missing split '{split}'", file=sys.stderr)
+            sys.exit(1)
+
+    knn_keys = [key for key in f["metadata"].keys() if key.startswith("knn_indices_geo_")]
+    if not knn_keys:
+        print("[VALIDATION] No KNN index datasets found in metadata group", file=sys.stderr)
+        sys.exit(1)
+
+summary = {
+    "embeddings_shape": embeddings_shape,
+    "num_metadata_rows": int(target_ids.shape[0]),
+    "num_unique_targets": int(np.unique(target_ids).size),
+    "num_valid_indices": int(valid_indices.size),
+    "split_counts": split_counts,
+    "knn_tables": sorted(knn_keys),
+}
+print("[VALIDATION] HDF5 summary:", json.dumps(summary))
+PY
+
+echo "[$(date)] HDF5 validation completed successfully"
 echo ""
 
 ###############################################################################

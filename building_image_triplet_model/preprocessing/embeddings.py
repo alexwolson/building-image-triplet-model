@@ -2,21 +2,26 @@
 
 import logging
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from PIL import Image
 import h5py
 import numpy as np
 import pandas as pd
 import psutil
+from pytorch_lightning import LightningDataModule, LightningModule
+from pytorch_lightning.callbacks import BasePredictionWriter
 from scipy.spatial import distance as sdist
 import torch
 from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
-import torchvision.transforms.functional as TF
 from tqdm import tqdm
 
-from ..utils import create_backbone_model, get_backbone_output_size, get_tqdm_params
+from ..utils import (
+    build_backbone_transform,
+    create_backbone_model,
+    get_backbone_output_size,
+    get_tqdm_params,
+)
 from .config import ProcessingConfig
 
 # Module-level logger
@@ -31,15 +36,8 @@ class ImageEmbeddingDataset(Dataset):
         self.config = config
         self.failed_indices = set()  # Track indices of failed images
 
-        # Image transformations
-        self.transform = transforms.Compose(
-            [
-                transforms.Lambda(lambda img: TF.center_crop(img, min(img.size))),
-                transforms.Resize((config.image_size, config.image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ]
-        )
+        # Backbone-specific preprocessing
+        self.transform = build_backbone_transform(config.feature_model, config.image_size)
 
     def __len__(self) -> int:
         return len(self.metadata_df)
@@ -65,6 +63,140 @@ class ImageEmbeddingDataset(Dataset):
             self.failed_indices.add(idx)
             zero_tensor = torch.zeros(3, self.config.image_size, self.config.image_size)
             return zero_tensor, idx, False
+
+
+class BackboneInferenceModule(LightningModule):
+    """Lightweight LightningModule wrapper for backbone inference."""
+
+    def __init__(self, config: ProcessingConfig):
+        super().__init__()
+        self.config = config
+        # Create backbone without moving to a specific device; Lightning manages device placement.
+        try:
+            self.backbone = create_backbone_model(config.feature_model, pretrained=True, device=None)
+        except Exception as exc:  # pragma: no cover - exercised when weights unavailable
+            logger.warning(
+                "Falling back to randomly initialized backbone '%s' due to: %s",
+                config.feature_model,
+                exc,
+            )
+            self.backbone = create_backbone_model(
+                config.feature_model,
+                pretrained=False,
+                device=None,
+            )
+        self.backbone.eval()
+        self.backbone.requires_grad_(False)
+        self.backbone_output_size = get_backbone_output_size(
+            config.feature_model,
+            backbone_model=self.backbone,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through the frozen backbone."""
+        return self.backbone(x)
+
+    def predict_step(
+        self,
+        batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> Dict[str, torch.Tensor]:
+        """Run a prediction step and return embeddings plus indices."""
+        images, indices, is_valid = batch
+        device = self.device
+        images = images.to(device, non_blocking=True)
+
+        if not isinstance(indices, torch.Tensor):
+            indices = torch.as_tensor(indices, dtype=torch.long, device=device)
+        else:
+            indices = indices.to(device)
+
+        if not isinstance(is_valid, torch.Tensor):
+            valid_mask = torch.as_tensor(is_valid, dtype=torch.bool, device=device)
+        else:
+            valid_mask = is_valid.to(device=device, dtype=torch.bool)
+
+        embeddings = torch.zeros(
+            (images.shape[0], self.backbone_output_size),
+            device=device,
+            dtype=torch.float32,
+        )
+
+        if valid_mask.any():
+            embeddings[valid_mask] = self.backbone(images[valid_mask])
+
+        return {
+            "embeddings": embeddings.detach().cpu(),
+            "indices": indices.detach().cpu(),
+        }
+
+    def configure_optimizers(self) -> None:  # type: ignore[override]
+        """No optimizers needed for inference-only module."""
+        return None
+
+
+class ImageEmbeddingDataModule(LightningDataModule):
+    """LightningDataModule that yields the ImageEmbeddingDataset for prediction."""
+
+    def __init__(self, metadata_df: pd.DataFrame, config: ProcessingConfig):
+        super().__init__()
+        self.metadata_df = metadata_df
+        self.config = config
+        self.dataset: Optional[ImageEmbeddingDataset] = None
+
+    def setup(self, stage: Optional[str] = None) -> None:  # type: ignore[override]
+        if self.dataset is None:
+            self.dataset = ImageEmbeddingDataset(self.metadata_df, self.config)
+
+    def predict_dataloader(self) -> DataLoader:  # type: ignore[override]
+        if self.dataset is None:
+            self.setup()
+        assert self.dataset is not None  # Satisfy type checkers
+        return DataLoader(
+            self.dataset,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            shuffle=False,
+            pin_memory=torch.cuda.is_available(),
+        )
+
+
+class HDF5PredictionWriter(BasePredictionWriter):
+    """Prediction writer that stores batch outputs as temporary NPZ files."""
+
+    def __init__(self, output_dir: str | Path, write_interval: str = "batch"):
+        super().__init__(write_interval=write_interval)
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._batch_counter = 0
+
+    def write_on_batch_end(  # type: ignore[override]
+        self,
+        trainer: Any,
+        pl_module: LightningModule,
+        prediction: Dict[str, Any],
+        batch_indices: Optional[torch.Tensor],
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        embeddings = prediction["embeddings"]
+        indices = prediction["indices"]
+
+        if isinstance(embeddings, torch.Tensor):
+            embeddings = embeddings.detach().cpu().numpy()
+        else:
+            embeddings = np.asarray(embeddings)
+
+        if isinstance(indices, torch.Tensor):
+            indices = indices.detach().cpu().numpy()
+        else:
+            indices = np.asarray(indices)
+
+        batch_path = self.output_dir / f"batch_{self._batch_counter:05d}.npz"
+        np.savez(batch_path, embeddings=embeddings, indices=indices)
+        self._batch_counter += 1
 
 
 class EmbeddingComputer:

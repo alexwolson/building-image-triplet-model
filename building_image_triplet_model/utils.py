@@ -1,7 +1,8 @@
 """Utility functions for building-image-triplet-model.
 
-Provides helper functions for working with vision backbone models (e.g., determining
-output dimensions, creating models for feature extraction).
+Provides helper utilities for working with vision backbone models (e.g., determining
+output dimensions, creating models for feature extraction, and building matching
+preprocessing transforms).
 """
 
 import os
@@ -9,6 +10,8 @@ from typing import Optional
 
 import timm
 import torch
+from timm.data import resolve_data_config
+from timm.data.transforms_factory import create_transform
 
 
 def get_backbone_output_size(
@@ -81,6 +84,27 @@ def create_backbone_model(
         backbone = backbone.to(device)
     backbone.eval()
     return backbone
+
+
+def build_backbone_transform(backbone_name: str, image_size: int):
+    """
+    Construct the evaluation transform that matches the backbone's default preprocessing.
+
+    Args:
+        backbone_name: Name of the backbone model (timm model name).
+        image_size: Target square image size for preprocessing.
+
+    Returns:
+        A torchvision-compatible transform pipeline.
+    """
+    model = timm.create_model(backbone_name, pretrained=False, num_classes=0)
+    try:
+        data_cfg = resolve_data_config({"input_size": (3, image_size, image_size)}, model=model)
+    finally:
+        del model
+
+    transform = create_transform(**data_cfg, is_training=False)
+    return transform
 
 
 def get_tqdm_params(desc: str = "") -> dict:

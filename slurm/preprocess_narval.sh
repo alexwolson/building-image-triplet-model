@@ -184,8 +184,8 @@ data:
   hdf5_path: "${OUTPUT_HDF5}"
   batch_size: 100
   num_workers: 8
-  feature_model: "vit_pe_spatial_base_patch16_512.fb"
-  image_size: 512
+  feature_model: "vit_base_patch14_dinov2.lvd142m"
+  image_size: 518
   # Optional: n_samples and n_images for limiting dataset size
   # n_samples: null
   # n_images: null
