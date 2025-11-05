@@ -1,8 +1,10 @@
 """Metadata parsing, caching, and data splitting utilities."""
 
 import logging
+import os
 from pathlib import Path
 import pickle
+import subprocess
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -20,6 +22,7 @@ class MetadataManager:
     def __init__(self, config: ProcessingConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
+        self.cache_sync_uri = os.getenv("METADATA_CACHE_SYNC_URI")
 
     def _get_cache_path(self) -> Path:
         """Get the path for the completed metadata cache file."""
@@ -86,6 +89,22 @@ class MetadataManager:
             self.logger.info("Moving cache to final location...")
             temp_cache_path.rename(final_cache_path)
             self.logger.info(f"Successfully saved completed metadata cache to {final_cache_path}")
+
+            if self.cache_sync_uri:
+                try:
+                    self.logger.info(
+                        "Syncing metadata cache to remote location: %s", self.cache_sync_uri
+                    )
+                    subprocess.run(
+                        ["gsutil", "cp", "-n", str(final_cache_path), self.cache_sync_uri],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.STDOUT,
+                    )
+                except Exception as sync_exc:  # pragma: no cover - optional enhancement
+                    self.logger.warning(
+                        "Failed to sync metadata cache to %s: %s", self.cache_sync_uri, sync_exc
+                    )
 
         except Exception as e:
             self.logger.warning(f"Failed to save cache: {e}")

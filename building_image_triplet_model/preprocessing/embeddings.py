@@ -246,32 +246,93 @@ class EmbeddingComputer:
         )
         self.logger.info("Backbone output size: %s", backbone_output_size)
 
-        embeddings_ds = h5_file.create_dataset(
-            "backbone_embeddings",
-            shape=(len(metadata_df), backbone_output_size),
-            dtype=np.float32,
-            compression="lzf",
-        )
+        if "backbone_embeddings" in h5_file:
+            embeddings_ds = h5_file["backbone_embeddings"]
+            if embeddings_ds.shape != (len(metadata_df), backbone_output_size):
+                raise ValueError(
+                    "Existing backbone_embeddings dataset has unexpected shape "
+                    f"{embeddings_ds.shape}; expected {(len(metadata_df), backbone_output_size)}"
+                )
+            self.logger.info(
+                "Found existing backbone_embeddings dataset; will resume incomplete rows."
+            )
+        else:
+            embeddings_ds = h5_file.create_dataset(
+                "backbone_embeddings",
+                shape=(len(metadata_df), backbone_output_size),
+                dtype=np.float32,
+                compression="lzf",
+            )
         h5_file.attrs["backbone_output_size"] = backbone_output_size
+
+        meta_grp = h5_file["metadata"]
+        if "backbone_completed_mask" in meta_grp:
+            mask_ds = meta_grp["backbone_completed_mask"]
+            if mask_ds.shape != (len(metadata_df),):
+                self.logger.warning(
+                    "Existing backbone_completed_mask shape %s != %d; recreating.",
+                    mask_ds.shape,
+                    len(metadata_df),
+                )
+                del meta_grp["backbone_completed_mask"]
+                mask_ds = meta_grp.create_dataset(
+                    "backbone_completed_mask",
+                    shape=(len(metadata_df),),
+                    dtype=np.bool_,
+                    compression="lzf",
+                )
+                mask_ds[...] = False
+            completed_mask = mask_ds[...].astype(bool)
+            self.logger.info(
+                "Loaded backbone completion mask: %d/%d rows complete.",
+                completed_mask.sum(),
+                len(completed_mask),
+            )
+        else:
+            mask_ds = meta_grp.create_dataset(
+                "backbone_completed_mask",
+                shape=(len(metadata_df),),
+                dtype=np.bool_,
+                compression="lzf",
+            )
+            mask_ds[...] = False
+            completed_mask = np.zeros(len(metadata_df), dtype=bool)
 
         progress = tqdm(dataloader, **get_tqdm_params("Computing backbone embeddings"))
         backbone.eval()
 
         with torch.no_grad():
             for images, indices, is_valid in progress:
-                indices_np = indices.cpu().numpy() if isinstance(indices, torch.Tensor) else np.asarray(indices)
-                images = images.to(device, non_blocking=True)
-                valid_mask = torch.as_tensor(is_valid, dtype=torch.bool, device=device)
-                batch_embeddings = torch.zeros(
-                    (images.shape[0], backbone_output_size),
-                    device=device,
+                indices_np = (
+                    indices.cpu().numpy() if isinstance(indices, torch.Tensor) else np.asarray(indices)
                 )
+                images = images.to(device, non_blocking=True)
+                valid_mask_t = torch.as_tensor(is_valid, dtype=torch.bool, device=device)
+                valid_mask_np = valid_mask_t.cpu().numpy()
 
-                if valid_mask.any():
-                    valid_embeddings = backbone(images[valid_mask])
-                    batch_embeddings[valid_mask] = valid_embeddings
+                already_done = completed_mask[indices_np]
+                if already_done.all():
+                    continue
 
-                embeddings_ds[indices_np] = batch_embeddings.cpu().numpy()
+                to_process_mask = ~already_done
+
+                compute_mask_np = to_process_mask & valid_mask_np
+                zero_mask_np = to_process_mask & ~valid_mask_np
+
+                if compute_mask_np.any():
+                    compute_mask_t = torch.as_tensor(compute_mask_np, dtype=torch.bool, device=device)
+                    new_embeddings = backbone(images[compute_mask_t])
+                    embeddings_ds[indices_np[compute_mask_np]] = new_embeddings.cpu().numpy()
+
+                if zero_mask_np.any():
+                    embeddings_ds[indices_np[zero_mask_np]] = np.zeros(
+                        (zero_mask_np.sum(), backbone_output_size), dtype=np.float32
+                    )
+
+                updated_indices = indices_np[to_process_mask]
+                if updated_indices.size > 0:
+                    completed_mask[updated_indices] = True
+                    mask_ds[updated_indices] = True
 
         if dataset.failed_indices:
             self.logger.warning(
@@ -307,10 +368,29 @@ class EmbeddingComputer:
                 compression="lzf",
             )
 
+        idx_key = f"knn_indices_geo_{split_name}"
+        dist_key = f"knn_distances_geo_{split_name}"
+
+        if idx_key in meta_grp and dist_key in meta_grp:
+            idx_ds_existing = meta_grp[idx_key]
+            dist_ds_existing = meta_grp[dist_key]
+            if idx_ds_existing.shape[0] == n and dist_ds_existing.shape[0] == n:
+                self.logger.info(
+                    "Geo KNN datasets for split='%s' already exist; skipping recomputation.",
+                    split_name,
+                )
+                return
+            self.logger.warning(
+                "Geo KNN datasets for split='%s' have mismatched shape; regenerating.",
+                split_name,
+            )
+            del meta_grp[idx_key]
+            del meta_grp[dist_key]
+
         process = psutil.Process()
         k = min(50, max(1, n - 1))
         idx_ds = meta_grp.create_dataset(  # type: ignore[attr-defined]
-            f"knn_indices_geo_{split_name}",
+            idx_key,
             shape=(n, k),
             dtype=np.int32,
             chunks=(min(1024, n), k),
@@ -318,7 +398,7 @@ class EmbeddingComputer:
             compression_opts=4,
         )
         dist_ds = meta_grp.create_dataset(  # type: ignore[attr-defined]
-            f"knn_distances_geo_{split_name}",
+            dist_key,
             shape=(n, k),
             dtype="float16",
             chunks=(min(1024, n), k),

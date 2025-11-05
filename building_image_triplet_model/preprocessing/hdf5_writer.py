@@ -45,13 +45,22 @@ class HDF5Writer:
             gc.collect()
 
     def initialize_hdf5(self, n_images: int, metadata_df: pd.DataFrame):
-        """Initialize HDF5 file with proper chunking and compression for metadata."""
-        # Ensure parent directory exists before creating HDF5 file
+        """Initialize or reopen HDF5 file; create expected groups if missing."""
         self.config.output_file.parent.mkdir(parents=True, exist_ok=True)
-        f = h5py.File(self.config.output_file, "w")
-        f.create_group("images")
-        f.create_group("metadata")
-        f.create_group("splits")
+
+        mode = "r+" if self.config.output_file.exists() else "w"
+        if mode == "r+":
+            self.logger.info("Reopening existing HDF5 file for resume: %s", self.config.output_file)
+        else:
+            self.logger.info("Creating new HDF5 output at: %s", self.config.output_file)
+
+        f = h5py.File(self.config.output_file, mode)
+
+        for group_name in ("images", "metadata", "splits"):
+            if group_name not in f:
+                self.logger.debug("Creating missing group '%s' in HDF5 file", group_name)
+                f.create_group(group_name)
+
         return f
 
     def process_image_batch(
@@ -79,34 +88,54 @@ class HDF5Writer:
 
     def store_metadata(self, h5_file, metadata_df: pd.DataFrame) -> None:
         """Store metadata columns in HDF5 file."""
+        meta_group = h5_file["metadata"]  # type: ignore[assignment]
         # Store metadata columns, handling strings explicitly for HDF5 compatibility
         for col in metadata_df.columns:
             col_data = metadata_df[col].values
+            if col in meta_group:
+                existing = meta_group[col]
+                if existing.shape[0] == len(metadata_df):
+                    self.logger.info("Metadata column '%s' already present; skipping write.", col)
+                    continue
+                self.logger.warning(
+                    "Metadata column '%s' has mismatched shape (existing=%s, new=%s). Rewriting dataset.",
+                    col,
+                    existing.shape,
+                    col_data.shape,
+                )
+                del meta_group[col]
+
             if col_data.dtype == object or col_data.dtype.kind in {"U", "S"}:
                 # Encode unicode/object strings as UTF-8 variable-length strings
                 dt = h5py.string_dtype(encoding="utf-8")
-                h5_file["metadata"].create_dataset(  # type: ignore
-                    col,
-                    data=col_data,
-                    dtype=dt,
-                    compression="lzf",
-                )
+                meta_group.create_dataset(col, data=col_data, dtype=dt, compression="lzf")
             else:
-                h5_file["metadata"].create_dataset(  # type: ignore
-                    col,
-                    data=col_data,
-                    compression="lzf",
-                )
+                meta_group.create_dataset(col, data=col_data, compression="lzf")
 
     def store_splits(self, h5_file, splits: dict) -> None:
         """Store train/val/test splits in HDF5 file."""
+        splits_group = h5_file["splits"]  # type: ignore[assignment]
         for split_name, split_targets in splits.items():
-            h5_file["splits"].create_dataset(  # type: ignore
-                split_name, data=split_targets, compression="lzf"
-            )
+            if split_name in splits_group:
+                existing = splits_group[split_name]
+                if existing.shape == split_targets.shape and np.array_equal(existing[...], split_targets):
+                    self.logger.info("Split '%s' already stored; skipping.", split_name)
+                    continue
+                self.logger.warning("Split '%s' will be overwritten to match new configuration.", split_name)
+                del splits_group[split_name]
+
+            splits_group.create_dataset(split_name, data=split_targets, compression="lzf")
 
     def process_and_store_images(self, h5_file, metadata_df: pd.DataFrame) -> List[int]:
         """Process images to get valid indices (without storing raw images)."""
+        images_group = h5_file["images"]  # type: ignore[assignment]
+        if "valid_indices" in images_group:
+            existing = images_group["valid_indices"][...]  # type: ignore[index]
+            self.logger.info(
+                "Found %d existing valid image indices; skipping image processing.", existing.size
+            )
+            return existing.astype(int).tolist()
+
         current_idx = 0  # Global row counter in metadata_df order
         valid_indices: List[int] = []
 
@@ -158,7 +187,6 @@ class HDF5Writer:
                     gc.collect()
 
         # Store valid_indices as a compact dataset
-        images_group = h5_file["images"]  # type: ignore[assignment]
         images_group.create_dataset(  # type: ignore[attr-defined]
             "valid_indices",
             data=np.asarray(valid_indices, dtype=np.int64),
