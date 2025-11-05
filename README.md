@@ -111,7 +111,7 @@ data:
 model:
   backbone: vit_base_patch14_dinov2.lvd142m  # Vision backbone
   embedding_size: 128                       # Output embedding dimension
-  margin: 1.0                               # Triplet loss margin
+  margin: 0.3                               # Triplet loss margin (cosine distance)
   backbone_output_size: 768                 # Backbone feature dimension (optional)
 ```
 

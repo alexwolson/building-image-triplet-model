@@ -39,7 +39,7 @@ logging:
 model:
   backbone: vit_base_patch14_dinov2.lvd142m
   embedding_size: 128
-  margin: 1.0
+  margin: 0.3
   # Backbone output size for precomputed embeddings (auto-determined if not set)
   # For vit_base_patch14_dinov2.lvd142m, this is typically 768
   backbone_output_size: null
