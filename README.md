@@ -102,21 +102,21 @@ data:
   num_difficulty_levels: 5                   # Triplet difficulty buckets
   ucb_alpha: 2.0                             # UCB exploration parameter
   cache_size: 1000                           # Embedding cache size
-  feature_model: vit_pe_spatial_base_patch16_512.fb  # Backbone model
-  image_size: 512                            # Input image size
+  feature_model: vit_base_patch14_dinov2.lvd142m  # Backbone model
+  image_size: 518                            # Input image size
 ```
 
 #### Model Configuration
 ```yaml
 model:
-  backbone: vit_pe_spatial_base_patch16_512.fb  # Vision backbone
+  backbone: vit_base_patch14_dinov2.lvd142m  # Vision backbone
   embedding_size: 128                       # Output embedding dimension
   margin: 1.0                               # Triplet loss margin
   backbone_output_size: 768                 # Backbone feature dimension (optional)
 ```
 
 **Note on `backbone_output_size`**: For optimal performance, explicitly set this value based on your backbone:
-- `vit_pe_spatial_base_patch16_512.fb`: 768
+- `vit_base_patch14_dinov2.lvd142m`: 768
 - `resnet18`: 512
 - `resnet50`: 2048
 - `efficientnet-b0`: 1280
@@ -515,4 +515,3 @@ For questions or issues, please open an issue on GitHub or contact the maintaine
 ---
 
 **Built with ❤️ using PyTorch Lightning and modern ML best practices**
-

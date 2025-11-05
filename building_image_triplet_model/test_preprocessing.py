@@ -15,6 +15,18 @@ from building_image_triplet_model.preprocessing.embeddings import (
     ImageEmbeddingDataset,
 )
 
+pytestmark = [
+    pytest.mark.filterwarnings(
+        "ignore:The 'predict_dataloader' does not have many workers which may be a bottleneck.:UserWarning"
+    ),
+    pytest.mark.filterwarnings(
+        "ignore:GPU available but not used. You can set it by doing `Trainer\\(accelerator='gpu'\\)`:UserWarning"
+    ),
+    pytest.mark.filterwarnings(
+        "ignore:The 'train_dataloader' does not have many workers which may be a bottleneck.:UserWarning"
+    ),
+]
+
 
 @pytest.fixture
 def sample_metadata():

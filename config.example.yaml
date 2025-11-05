@@ -22,8 +22,8 @@ data:
   cache_size: 1000                # Number of embeddings to cache in memory
   
   # Model configuration for preprocessing
-  feature_model: vit_pe_spatial_base_patch16_512.fb  # Backbone model for feature extraction
-  image_size: 512                 # Input image size for the backbone model
+  feature_model: vit_base_patch14_dinov2.lvd142m  # Backbone model for feature extraction
+  image_size: 518                 # Input image size for the backbone model
   
   # Multi-GPU preprocessing settings
   devices: "auto"                 # Number of GPUs to use for preprocessing ("auto", 1, 2, etc.)
@@ -37,11 +37,11 @@ logging:
   offline: false  # Set to true to disable wandb logging
 
 model:
-  backbone: vit_pe_spatial_base_patch16_512.fb
+  backbone: vit_base_patch14_dinov2.lvd142m
   embedding_size: 128
   margin: 1.0
   # Backbone output size for precomputed embeddings (auto-determined if not set)
-  # For vit_pe_spatial_base_patch16_512.fb, this is typically 768
+  # For vit_base_patch14_dinov2.lvd142m, this is typically 768
   backbone_output_size: null
 
 train:
