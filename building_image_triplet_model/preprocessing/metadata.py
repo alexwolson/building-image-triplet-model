@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 import pickle
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -126,7 +126,7 @@ class MetadataManager:
 
         return df
 
-    def _parse_txt_file(self, txt_path: Path) -> Optional[Dict[str, Any]]:
+    def _parse_txt_file(self, txt_path: Path) -> Optional[dict[str, Any]]:
         """Parse a single .txt metadata file.
 
         Returns None if the file cannot be parsed or if the paired image doesn't exist.
@@ -208,12 +208,10 @@ class MetadataManager:
 
         self.logger.info(f"Found {len(txt_files)} .txt files to process")
 
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
 
         self.logger.info("Starting to parse .txt metadata files...")
-        for p in tqdm(
-            txt_files, **get_tqdm_params("Parsing .txt metadata")
-        ):
+        for p in tqdm(txt_files, **get_tqdm_params("Parsing .txt metadata")):
             rec = self._parse_txt_file(p)
             if rec is not None:
                 records.append(rec)
@@ -233,7 +231,7 @@ class MetadataManager:
         df = self._apply_sampling(df)
         return df
 
-    def create_splits(self, target_ids: Any) -> Dict[str, Any]:
+    def create_splits(self, target_ids: Any) -> dict[str, Any]:
         """Create train/val/test splits based on TargetID."""
         target_ids = np.array(target_ids)
         train_targets, temp_targets = train_test_split(

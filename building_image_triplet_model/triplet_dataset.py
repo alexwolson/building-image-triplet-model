@@ -2,7 +2,7 @@ from collections import Counter, OrderedDict, defaultdict, deque
 from dataclasses import dataclass
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import h5py
 import numpy as np
@@ -96,9 +96,9 @@ class GeoTripletDataset(Dataset):
         self.transform = transform
         self.split = split
         self.cache_size = cache_size
-        self.cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
-        self.tensor_cache: "OrderedDict[int, torch.Tensor]" = OrderedDict()
-        self.row_cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
+        self.cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        self.tensor_cache: OrderedDict[int, torch.Tensor] = OrderedDict()
+        self.row_cache: OrderedDict[int, np.ndarray] = OrderedDict()
         self.row_cache_size = 1024
         self.rng = np.random.default_rng()
         self.ucb_alpha = ucb_alpha
@@ -149,7 +149,7 @@ class GeoTripletDataset(Dataset):
         self.difficulty_levels = self._init_difficulty_levels(num_difficulty_levels)
         # Track which difficulty level was used for each sample index
         # Use deque with maxlen to prevent unbounded memory growth
-        self.sample_difficulty_history: "deque[int]" = deque(maxlen=difficulty_update_window)
+        self.sample_difficulty_history: deque[int] = deque(maxlen=difficulty_update_window)
         logger.info(
             f"GeoTripletDataset split='{split}' created with {len(self.valid_indices)} samples."
         )
@@ -175,14 +175,14 @@ class GeoTripletDataset(Dataset):
         self.__dict__.update(state)
         self._open_h5()
 
-    def _create_target_mapping(self) -> Dict[Any, List[int]]:
+    def _create_target_mapping(self) -> dict[Any, list[int]]:
         """Map each target_id -> list of local indices in this dataset's subset."""
-        mapping: Dict[Any, List[int]] = defaultdict(list)
+        mapping: dict[Any, list[int]] = defaultdict(list)
         for local_idx, target_id in enumerate(self.target_ids):
             mapping[target_id].append(local_idx)
         return dict(mapping)
 
-    def _init_difficulty_levels(self, num_levels: int) -> List[TripletDifficulty]:
+    def _init_difficulty_levels(self, num_levels: int) -> list[TripletDifficulty]:
         """Build difficulty bands using quantiles of the distance matrix."""
         # Flatten KNN distances to approximate global distribution (ignore inf)
         all_dists = self.knn_distances[:].astype(np.float32).flatten()
@@ -256,7 +256,7 @@ class GeoTripletDataset(Dataset):
         self.row_cache[anchor_row] = row
         return row
 
-    def _get_negative_sample(self, anchor_idx: int) -> Tuple[int, int]:
+    def _get_negative_sample(self, anchor_idx: int) -> tuple[int, int]:
         """
         Sample a negative index based on difficulty, fallback to random if needed.
         Returns tuple of (negative_idx, difficulty_level_index).
@@ -336,11 +336,13 @@ class GeoTripletDataset(Dataset):
         self.tensor_cache[local_idx] = tensor
         return tensor
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return (anchor_img, positive_img, negative_img) as torch Tensors."""
         anchor_idx = idx % len(self.valid_indices)
         anchor_target_id = self.target_ids[anchor_idx]
-        positive_candidates = [i for i in self.target_to_indices[anchor_target_id] if i != anchor_idx]
+        positive_candidates = [
+            i for i in self.target_to_indices[anchor_target_id] if i != anchor_idx
+        ]
         if not positive_candidates:
             positive_idx = anchor_idx
         else:

@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from PIL import Image
 import h5py
@@ -73,7 +73,9 @@ class BackboneInferenceModule(LightningModule):
         self.config = config
         # Create backbone without moving to a specific device; Lightning manages device placement.
         try:
-            self.backbone = create_backbone_model(config.feature_model, pretrained=True, device=None)
+            self.backbone = create_backbone_model(
+                config.feature_model, pretrained=True, device=None
+            )
         except Exception as exc:  # pragma: no cover - exercised when weights unavailable
             logger.warning(
                 "Falling back to randomly initialized backbone '%s' due to: %s",
@@ -98,10 +100,10 @@ class BackboneInferenceModule(LightningModule):
 
     def predict_step(
         self,
-        batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         batch_idx: int,
         dataloader_idx: int = 0,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """Run a prediction step and return embeddings plus indices."""
         images, indices, is_valid = batch
         device = self.device
@@ -175,7 +177,7 @@ class HDF5PredictionWriter(BasePredictionWriter):
         self,
         trainer: Any,
         pl_module: LightningModule,
-        prediction: Dict[str, Any],
+        prediction: dict[str, Any],
         batch_indices: Optional[torch.Tensor],
         batch: Any,
         batch_idx: int,
@@ -206,7 +208,7 @@ class EmbeddingComputer:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-    def compute_geo_embeddings(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    def compute_geo_embeddings(self, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
         """Return (sorted_target_ids, embeddings) for geo metric."""
         self.logger.info("Computing embeddings for geo metric...")
         targets = np.sort(np.asarray(df["TargetID"].unique(), dtype=np.int64))
@@ -259,7 +261,11 @@ class EmbeddingComputer:
 
         with torch.no_grad():
             for images, indices, is_valid in progress:
-                indices_np = indices.cpu().numpy() if isinstance(indices, torch.Tensor) else np.asarray(indices)
+                indices_np = (
+                    indices.cpu().numpy()
+                    if isinstance(indices, torch.Tensor)
+                    else np.asarray(indices)
+                )
                 images = images.to(device, non_blocking=True)
                 valid_mask = torch.as_tensor(is_valid, dtype=torch.bool, device=device)
                 batch_embeddings = torch.zeros(
