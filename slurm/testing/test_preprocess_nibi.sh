@@ -1,13 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=preprocess-dataset
+#SBATCH --job-name=test-preprocess-dataset
 #SBATCH --account=def-bussmann
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:1                   # Single GPU is sufficient for backbone embedding computation
-#SBATCH --cpus-per-task=16             # 16 cores for parallel image processing (adjust based on num_workers)
-#SBATCH --mem=64G                      # 64GB for loading images and embeddings in memory
-#SBATCH --time=48:00:00                # 48 hours (preprocessing can be long-running)
-#SBATCH --output=slurm-preprocess-%j.out  # Job output log
-#SBATCH --error=slurm-preprocess-%j.err   # Job error log
+#SBATCH --gres=gpu:1                   # Single GPU is sufficient for backbone embeddings
+#SBATCH --cpus-per-task=8              # 8 cores for parallel image processing
+#SBATCH --mem=32G                      # 32GB for loading images and embeddings in memory
+#SBATCH --time=04:00:00                # 4 hours for testing
+#SBATCH --chdir=/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model
+#SBATCH --output=slurm/logs/test_preprocess_nibi-%j.out  # Job output log
+#SBATCH --error=slurm/logs/test_preprocess_nibi-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
 #SBATCH --mail-type=END,FAIL            # Email on completion or failure
 
@@ -19,30 +20,27 @@
 set -euo pipefail
 
 echo "=========================================="
-echo "Starting preprocessing job on $(hostname) at $(date)"
+echo "Starting TEST preprocessing job on $(hostname) at $(date)"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "=========================================="
 
 # Load modules (Nibi cluster) - suppress Lmod informational messages
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 
 # Define paths
 TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/dataset_unaligned"
 EXTRACT_DIR="${SLURM_TMPDIR}/extracted_dataset"
 PROJECT_SOURCE="/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model"
 PROJECT_DIR="${SLURM_TMPDIR}/building-image-triplet-model"
-OUTPUT_HDF5="/home/awolson/scratch/building-image-triplet-model/dataset.h5"
+OUTPUT_HDF5="${SLURM_TMPDIR}/test_dataset.h5"  # Changed to TMPDIR - will be auto-cleaned
 CONFIG_FILE="${SLURM_TMPDIR}/preprocess_config.yaml"
-
-# Create output directory
-mkdir -p "$(dirname "${OUTPUT_HDF5}")"
 
 echo "Configuration:"
 echo "  TAR_SOURCE_DIR: ${TAR_SOURCE_DIR}"
 echo "  EXTRACT_DIR: ${EXTRACT_DIR}"
-echo "  OUTPUT_HDF5: ${OUTPUT_HDF5}"
+echo "  OUTPUT_HDF5: ${OUTPUT_HDF5} (temporary - will be deleted)"
 echo ""
 
 ###############################################################################
@@ -76,10 +74,10 @@ echo "[$(date)] Environment setup complete"
 echo ""
 
 ###############################################################################
-# Phase 3: Tar File Extraction
+# Phase 3: Tar File Extraction (SINGLE FILE ONLY FOR TESTING)
 ###############################################################################
 
-echo "[$(date)] Starting tar file extraction..."
+echo "[$(date)] Starting tar file extraction (SINGLE FILE TEST)..."
 
 # Create extraction directory
 mkdir -p "${EXTRACT_DIR}"
@@ -99,17 +97,16 @@ else
 fi
 echo ""
 
-# Loop through tar files with graceful error handling
+# Extract only the FIRST tar file found (for testing)
 EXTRACTED_COUNT=0
 FAILED_COUNT=0
 FAILED_FILES=()
 
-# Process .tar files
+# Process only one .tar file
 shopt -s nullglob
 for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SOURCE_DIR}"/*.tgz; do
-
     filename=$(basename "${tar_file}")
-    echo "[$(date)] Extracting ${filename}..."
+    echo "[$(date)] Extracting ${filename} (TEST MODE - single file only)..."
 
     # Extract with error handling - continue on failure
     if tar -xf "${tar_file}" 2>&1; then
@@ -120,10 +117,13 @@ for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SO
         FAILED_COUNT=$((FAILED_COUNT + 1))
         FAILED_FILES+=("${filename}")
     fi
+    
+    # BREAK AFTER FIRST FILE (TEST MODE)
+    break
 done
 
 echo ""
-echo "[$(date)] Extraction complete: ${EXTRACTED_COUNT} succeeded, ${FAILED_COUNT} failed"
+echo "[$(date)] Extraction complete (TEST MODE): ${EXTRACTED_COUNT} succeeded, ${FAILED_COUNT} failed"
 if [[ ${FAILED_COUNT} -gt 0 ]]; then
     echo "Failed files: ${FAILED_FILES[*]}"
 fi
@@ -190,7 +190,7 @@ echo "[$(date)] Starting preprocessing pipeline..."
 cd "${PROJECT_DIR}"
 
 srun --ntasks=1 \
-     --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
+     --cpus-per-task="${SLURM_CPUS_PER_TASK:-8}" \
      uv run python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
@@ -209,14 +209,92 @@ fi
 echo ""
 
 ###############################################################################
+# Phase 5b: Validate Output HDF5 Structure
+###############################################################################
+
+echo "[$(date)] Validating output HDF5 structure..."
+
+OUTPUT_HDF5="${OUTPUT_HDF5}" uv run python - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+import h5py
+import numpy as np
+
+path = Path(os.environ["OUTPUT_HDF5"])
+if not path.exists():
+    print(f"[VALIDATION] Missing expected HDF5 file at {path}", file=sys.stderr)
+    sys.exit(1)
+
+with h5py.File(path, "r") as f:
+    required_groups = ["images", "metadata", "splits"]
+    missing = [grp for grp in required_groups if grp not in f]
+    if missing:
+        print(f"[VALIDATION] Missing groups: {missing}", file=sys.stderr)
+        sys.exit(1)
+
+    if "backbone_embeddings" not in f:
+        print("[VALIDATION] Missing 'backbone_embeddings' dataset", file=sys.stderr)
+        sys.exit(1)
+
+    embeddings_shape = f["backbone_embeddings"].shape
+    target_ids = f["metadata"]["TargetID"][:]
+    if embeddings_shape[0] != target_ids.shape[0]:
+        print(
+            "[VALIDATION] Embedding count does not match metadata rows "
+            f"({embeddings_shape[0]} != {target_ids.shape[0]})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    valid_indices = f["images"]["valid_indices"][:]
+    if valid_indices.size == 0:
+        print("[VALIDATION] No valid image indices were stored", file=sys.stderr)
+        sys.exit(1)
+
+    split_counts = {}
+    for split in ("train", "val", "test"):
+        if split in f["splits"]:
+            split_counts[split] = int(f["splits"][split].size)
+        else:
+            print(f"[VALIDATION] Missing split '{split}'", file=sys.stderr)
+            sys.exit(1)
+
+    knn_keys = [key for key in f["metadata"].keys() if key.startswith("knn_indices_geo_")]
+    if not knn_keys:
+        print("[VALIDATION] No KNN index datasets found in metadata group", file=sys.stderr)
+        sys.exit(1)
+
+summary = {
+    "embeddings_shape": embeddings_shape,
+    "num_metadata_rows": int(target_ids.shape[0]),
+    "num_unique_targets": int(np.unique(target_ids).size),
+    "num_valid_indices": int(valid_indices.size),
+    "split_counts": split_counts,
+    "knn_tables": sorted(knn_keys),
+}
+print("[VALIDATION] HDF5 summary:", json.dumps(summary))
+PY
+
+echo "[$(date)] HDF5 validation completed successfully"
+echo ""
+
+###############################################################################
 # Phase 6: Cleanup and Summary
 ###############################################################################
 
+echo "[$(date)] Cleaning up test HDF5 file..."
+rm -f "${OUTPUT_HDF5}"
+echo "[$(date)] Test HDF5 file deleted"
+echo ""
+
 echo "=========================================="
-echo "Job Summary"
+echo "Job Summary (TEST MODE)"
 echo "=========================================="
 echo "Tar extraction:"
-echo "  - Successfully extracted: ${EXTRACTED_COUNT} files"
+echo "  - Successfully extracted: ${EXTRACTED_COUNT} files (single file test)"
 echo "  - Failed extractions: ${FAILED_COUNT} files"
 if [[ ${FAILED_COUNT} -gt 0 ]]; then
     echo "  - Failed files: ${FAILED_FILES[*]}"
@@ -224,10 +302,7 @@ fi
 echo ""
 echo "Preprocessing results:"
 echo "  - Input files: ${TXT_FILE_COUNT} .txt, ${JPG_FILE_COUNT} .jpg"
-echo "  - Output HDF5: ${OUTPUT_HDF5}"
-if [[ -f "${OUTPUT_HDF5}" ]]; then
-    echo "  - Output file size: $(ls -lh "${OUTPUT_HDF5}" | awk '{print $5}')"
-fi
+echo "  - Output HDF5 was created and then deleted (test mode)"
 echo ""
 echo "Job completed on $(hostname) at $(date)"
 echo "=========================================="

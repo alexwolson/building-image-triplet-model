@@ -1,15 +1,33 @@
 #!/bin/bash
-#SBATCH --job-name=test-preprocess-dataset
+#SBATCH --job-name=preprocess-dataset
 #SBATCH --account=def-bussmann
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:1                   # Single GPU is sufficient for backbone embeddings
-#SBATCH --cpus-per-task=8              # 8 cores for parallel image processing
-#SBATCH --mem=32G                      # 32GB for loading images and embeddings in memory
-#SBATCH --time=04:00:00                # 4 hours for testing
-#SBATCH --output=slurm-test-preprocess-%j.out  # Job output log
-#SBATCH --error=slurm-test-preprocess-%j.err   # Job error log
+#SBATCH --gres=gpu:1                   # Single GPU is sufficient for backbone embedding computation
+#SBATCH --cpus-per-task=16             # 16 cores for parallel image processing (adjust based on num_workers)
+#SBATCH --mem=64G                      # 64GB for loading images and embeddings in memory
+#SBATCH --time=48:00:00                # 48 hours (preprocessing can be long-running)
+#SBATCH --chdir=/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model
+#SBATCH --output=slurm/logs/preprocess_narval-%j.out  # Job output log
+#SBATCH --error=slurm/logs/preprocess_narval-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
 #SBATCH --mail-type=END,FAIL            # Email on completion or failure
+
+###############################################################################
+# Dataset Preprocessing Script for Narval Cluster
+#
+# PREREQUISITES:
+#   Before submitting this job, you must run the environment setup script
+#   on the login node:
+#     bash slurm/setup_narval_env.sh
+#
+#   This creates a virtual environment with uv and installs all dependencies.
+#
+# USAGE:
+#   sbatch slurm/preprocess_narval.sh
+#
+# This script assumes the virtual environment already exists at:
+#   /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/.venv
+###############################################################################
 
 ###############################################################################
 # Phase 1: Setup and Initialization
@@ -19,27 +37,31 @@
 set -euo pipefail
 
 echo "=========================================="
-echo "Starting TEST preprocessing job on $(hostname) at $(date)"
+echo "Starting preprocessing job on $(hostname) at $(date)"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "=========================================="
 
-# Load modules (Nibi cluster) - suppress Lmod informational messages
+# Load modules (Narval cluster - no internet access) - suppress Lmod informational messages
+# NOTE: These module versions must match those in setup_narval_env.sh to ensure consistency
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 
 # Define paths
-TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/dataset_unaligned"
+TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/"
 EXTRACT_DIR="${SLURM_TMPDIR}/extracted_dataset"
 PROJECT_SOURCE="/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model"
 PROJECT_DIR="${SLURM_TMPDIR}/building-image-triplet-model"
-OUTPUT_HDF5="${SLURM_TMPDIR}/test_dataset.h5"  # Changed to TMPDIR - will be auto-cleaned
+OUTPUT_HDF5="/home/awolson/scratch/building-image-triplet-model/dataset.h5"
 CONFIG_FILE="${SLURM_TMPDIR}/preprocess_config.yaml"
+
+# Create output directory
+mkdir -p "$(dirname "${OUTPUT_HDF5}")"
 
 echo "Configuration:"
 echo "  TAR_SOURCE_DIR: ${TAR_SOURCE_DIR}"
 echo "  EXTRACT_DIR: ${EXTRACT_DIR}"
-echo "  OUTPUT_HDF5: ${OUTPUT_HDF5} (temporary - will be deleted)"
+echo "  OUTPUT_HDF5: ${OUTPUT_HDF5}"
 echo ""
 
 ###############################################################################
@@ -48,35 +70,32 @@ echo ""
 
 echo "[$(date)] Setting up environment..."
 
-# Install uv if not available
-if ! command -v uv &> /dev/null; then
-    echo "[$(date)] Installing uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-# Suppress UV hardlink warning (common on cluster filesystems)
-export UV_LINK_MODE=copy
-
 # Copy project to SLURM_TMPDIR
 echo "[$(date)] Copying project to ${PROJECT_DIR}..."
 cp -r "${PROJECT_SOURCE}" "${PROJECT_DIR}"
 cd "${PROJECT_DIR}"
 
-# Create virtual environment and install dependencies
-echo "[$(date)] Creating virtual environment and installing dependencies..."
-uv venv
+# Activate the pre-created virtual environment
+# This environment should have been created on the login node using setup_narval_env.sh
+echo "[$(date)] Activating pre-created virtual environment..."
+if [[ ! -f .venv/bin/activate ]]; then
+    echo "ERROR: Virtual environment not found at .venv/bin/activate" >&2
+    echo "Please run setup_narval_env.sh on the login node first:" >&2
+    echo "  bash slurm/setup_narval_env.sh" >&2
+    exit 1
+fi
 source .venv/bin/activate
-uv sync
 
-echo "[$(date)] Environment setup complete"
+echo "[$(date)] Environment activated successfully"
+echo "Python version: $(python --version)"
+echo "Python location: $(which python)"
 echo ""
 
 ###############################################################################
-# Phase 3: Tar File Extraction (SINGLE FILE ONLY FOR TESTING)
+# Phase 3: Tar File Extraction
 ###############################################################################
 
-echo "[$(date)] Starting tar file extraction (SINGLE FILE TEST)..."
+echo "[$(date)] Starting tar file extraction..."
 
 # Create extraction directory
 mkdir -p "${EXTRACT_DIR}"
@@ -96,16 +115,17 @@ else
 fi
 echo ""
 
-# Extract only the FIRST tar file found (for testing)
+# Loop through tar files with graceful error handling
 EXTRACTED_COUNT=0
 FAILED_COUNT=0
 FAILED_FILES=()
 
-# Process only one .tar file
+# Process .tar files
 shopt -s nullglob
 for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SOURCE_DIR}"/*.tgz; do
+
     filename=$(basename "${tar_file}")
-    echo "[$(date)] Extracting ${filename} (TEST MODE - single file only)..."
+    echo "[$(date)] Extracting ${filename}..."
 
     # Extract with error handling - continue on failure
     if tar -xf "${tar_file}" 2>&1; then
@@ -116,13 +136,10 @@ for tar_file in "${TAR_SOURCE_DIR}"/*.tar "${TAR_SOURCE_DIR}"/*.tar.gz "${TAR_SO
         FAILED_COUNT=$((FAILED_COUNT + 1))
         FAILED_FILES+=("${filename}")
     fi
-    
-    # BREAK AFTER FIRST FILE (TEST MODE)
-    break
 done
 
 echo ""
-echo "[$(date)] Extraction complete (TEST MODE): ${EXTRACTED_COUNT} succeeded, ${FAILED_COUNT} failed"
+echo "[$(date)] Extraction complete: ${EXTRACTED_COUNT} succeeded, ${FAILED_COUNT} failed"
 if [[ ${FAILED_COUNT} -gt 0 ]]; then
     echo "Failed files: ${FAILED_FILES[*]}"
 fi
@@ -189,8 +206,8 @@ echo "[$(date)] Starting preprocessing pipeline..."
 cd "${PROJECT_DIR}"
 
 srun --ntasks=1 \
-     --cpus-per-task="${SLURM_CPUS_PER_TASK:-8}" \
-     uv run python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
+     --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
+     .venv/bin/python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
 echo ""
@@ -208,92 +225,14 @@ fi
 echo ""
 
 ###############################################################################
-# Phase 5b: Validate Output HDF5 Structure
-###############################################################################
-
-echo "[$(date)] Validating output HDF5 structure..."
-
-OUTPUT_HDF5="${OUTPUT_HDF5}" uv run python - <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
-
-import h5py
-import numpy as np
-
-path = Path(os.environ["OUTPUT_HDF5"])
-if not path.exists():
-    print(f"[VALIDATION] Missing expected HDF5 file at {path}", file=sys.stderr)
-    sys.exit(1)
-
-with h5py.File(path, "r") as f:
-    required_groups = ["images", "metadata", "splits"]
-    missing = [grp for grp in required_groups if grp not in f]
-    if missing:
-        print(f"[VALIDATION] Missing groups: {missing}", file=sys.stderr)
-        sys.exit(1)
-
-    if "backbone_embeddings" not in f:
-        print("[VALIDATION] Missing 'backbone_embeddings' dataset", file=sys.stderr)
-        sys.exit(1)
-
-    embeddings_shape = f["backbone_embeddings"].shape
-    target_ids = f["metadata"]["TargetID"][:]
-    if embeddings_shape[0] != target_ids.shape[0]:
-        print(
-            "[VALIDATION] Embedding count does not match metadata rows "
-            f"({embeddings_shape[0]} != {target_ids.shape[0]})",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    valid_indices = f["images"]["valid_indices"][:]
-    if valid_indices.size == 0:
-        print("[VALIDATION] No valid image indices were stored", file=sys.stderr)
-        sys.exit(1)
-
-    split_counts = {}
-    for split in ("train", "val", "test"):
-        if split in f["splits"]:
-            split_counts[split] = int(f["splits"][split].size)
-        else:
-            print(f"[VALIDATION] Missing split '{split}'", file=sys.stderr)
-            sys.exit(1)
-
-    knn_keys = [key for key in f["metadata"].keys() if key.startswith("knn_indices_geo_")]
-    if not knn_keys:
-        print("[VALIDATION] No KNN index datasets found in metadata group", file=sys.stderr)
-        sys.exit(1)
-
-summary = {
-    "embeddings_shape": embeddings_shape,
-    "num_metadata_rows": int(target_ids.shape[0]),
-    "num_unique_targets": int(np.unique(target_ids).size),
-    "num_valid_indices": int(valid_indices.size),
-    "split_counts": split_counts,
-    "knn_tables": sorted(knn_keys),
-}
-print("[VALIDATION] HDF5 summary:", json.dumps(summary))
-PY
-
-echo "[$(date)] HDF5 validation completed successfully"
-echo ""
-
-###############################################################################
 # Phase 6: Cleanup and Summary
 ###############################################################################
 
-echo "[$(date)] Cleaning up test HDF5 file..."
-rm -f "${OUTPUT_HDF5}"
-echo "[$(date)] Test HDF5 file deleted"
-echo ""
-
 echo "=========================================="
-echo "Job Summary (TEST MODE)"
+echo "Job Summary"
 echo "=========================================="
 echo "Tar extraction:"
-echo "  - Successfully extracted: ${EXTRACTED_COUNT} files (single file test)"
+echo "  - Successfully extracted: ${EXTRACTED_COUNT} files"
 echo "  - Failed extractions: ${FAILED_COUNT} files"
 if [[ ${FAILED_COUNT} -gt 0 ]]; then
     echo "  - Failed files: ${FAILED_FILES[*]}"
@@ -301,7 +240,10 @@ fi
 echo ""
 echo "Preprocessing results:"
 echo "  - Input files: ${TXT_FILE_COUNT} .txt, ${JPG_FILE_COUNT} .jpg"
-echo "  - Output HDF5 was created and then deleted (test mode)"
+echo "  - Output HDF5: ${OUTPUT_HDF5}"
+if [[ -f "${OUTPUT_HDF5}" ]]; then
+    echo "  - Output file size: $(ls -lh "${OUTPUT_HDF5}" | awk '{print $5}')"
+fi
 echo ""
 echo "Job completed on $(hostname) at $(date)"
 echo "=========================================="

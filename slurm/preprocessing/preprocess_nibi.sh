@@ -6,27 +6,11 @@
 #SBATCH --cpus-per-task=16             # 16 cores for parallel image processing (adjust based on num_workers)
 #SBATCH --mem=64G                      # 64GB for loading images and embeddings in memory
 #SBATCH --time=48:00:00                # 48 hours (preprocessing can be long-running)
-#SBATCH --output=slurm-preprocess-%j.out  # Job output log
-#SBATCH --error=slurm-preprocess-%j.err   # Job error log
+#SBATCH --chdir=/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model
+#SBATCH --output=slurm/logs/preprocess_nibi-%j.out  # Job output log
+#SBATCH --error=slurm/logs/preprocess_nibi-%j.err   # Job error log
 #SBATCH --mail-user=alex.olson@utoronto.ca
 #SBATCH --mail-type=END,FAIL            # Email on completion or failure
-
-###############################################################################
-# Dataset Preprocessing Script for Narval Cluster
-#
-# PREREQUISITES:
-#   Before submitting this job, you must run the environment setup script
-#   on the login node:
-#     bash slurm/setup_narval_env.sh
-#
-#   This creates a virtual environment with uv and installs all dependencies.
-#
-# USAGE:
-#   sbatch slurm/preprocess_narval.sh
-#
-# This script assumes the virtual environment already exists at:
-#   /home/awolson/projects/def-bussmann/awolson/building-image-triplet-model/.venv
-###############################################################################
 
 ###############################################################################
 # Phase 1: Setup and Initialization
@@ -40,14 +24,13 @@ echo "Starting preprocessing job on $(hostname) at $(date)"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "=========================================="
 
-# Load modules (Narval cluster - no internet access) - suppress Lmod informational messages
-# NOTE: These module versions must match those in setup_narval_env.sh to ensure consistency
+# Load modules (Nibi cluster) - suppress Lmod informational messages
 module --quiet load StdEnv/2023 intel/2023.2.1 cuda/11.8 python/3.12
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 
 # Define paths
-TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/"
+TAR_SOURCE_DIR="/home/awolson/scratch/awolson/3d_street_view/archives/dataset_unaligned"
 EXTRACT_DIR="${SLURM_TMPDIR}/extracted_dataset"
 PROJECT_SOURCE="/home/awolson/projects/def-bussmann/awolson/building-image-triplet-model"
 PROJECT_DIR="${SLURM_TMPDIR}/building-image-triplet-model"
@@ -69,25 +52,28 @@ echo ""
 
 echo "[$(date)] Setting up environment..."
 
+# Install uv if not available
+if ! command -v uv &> /dev/null; then
+    echo "[$(date)] Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Suppress UV hardlink warning (common on cluster filesystems)
+export UV_LINK_MODE=copy
+
 # Copy project to SLURM_TMPDIR
 echo "[$(date)] Copying project to ${PROJECT_DIR}..."
 cp -r "${PROJECT_SOURCE}" "${PROJECT_DIR}"
 cd "${PROJECT_DIR}"
 
-# Activate the pre-created virtual environment
-# This environment should have been created on the login node using setup_narval_env.sh
-echo "[$(date)] Activating pre-created virtual environment..."
-if [[ ! -f .venv/bin/activate ]]; then
-    echo "ERROR: Virtual environment not found at .venv/bin/activate" >&2
-    echo "Please run setup_narval_env.sh on the login node first:" >&2
-    echo "  bash slurm/setup_narval_env.sh" >&2
-    exit 1
-fi
+# Create virtual environment and install dependencies
+echo "[$(date)] Creating virtual environment and installing dependencies..."
+uv venv
 source .venv/bin/activate
+uv sync
 
-echo "[$(date)] Environment activated successfully"
-echo "Python version: $(python --version)"
-echo "Python location: $(which python)"
+echo "[$(date)] Environment setup complete"
 echo ""
 
 ###############################################################################
@@ -206,7 +192,7 @@ cd "${PROJECT_DIR}"
 
 srun --ntasks=1 \
      --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
-     .venv/bin/python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
+     uv run python -m building_image_triplet_model.dataset_processor --config "${CONFIG_FILE}"
 
 echo "[$(date)] Preprocessing pipeline completed"
 echo ""
