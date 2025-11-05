@@ -96,9 +96,9 @@ class GeoTripletDataset(Dataset):
         self.transform = transform
         self.split = split
         self.cache_size = cache_size
-        self.cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
-        self.tensor_cache: "OrderedDict[int, torch.Tensor]" = OrderedDict()
-        self.row_cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
+        self.cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        self.tensor_cache: OrderedDict[int, torch.Tensor] = OrderedDict()
+        self.row_cache: OrderedDict[int, np.ndarray] = OrderedDict()
         self.row_cache_size = 1024
         self.rng = np.random.default_rng()
         self.ucb_alpha = ucb_alpha
@@ -149,7 +149,7 @@ class GeoTripletDataset(Dataset):
         self.difficulty_levels = self._init_difficulty_levels(num_difficulty_levels)
         # Track which difficulty level was used for each sample index
         # Use deque with maxlen to prevent unbounded memory growth
-        self.sample_difficulty_history: "deque[int]" = deque(maxlen=difficulty_update_window)
+        self.sample_difficulty_history: deque[int] = deque(maxlen=difficulty_update_window)
         logger.info(
             f"GeoTripletDataset split='{split}' created with {len(self.valid_indices)} samples."
         )
